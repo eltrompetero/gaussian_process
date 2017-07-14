@@ -44,11 +44,13 @@ class GaussianProcessRegressor(object):
         """
         This is vectorized in __init__().
         """
+        assert (not self.X is None) and (not self.Y is None)
         k = self.kernel(x,self.X)
         mu = k.T.dot(self.invCov).dot(self.Y)
         return mu
     
     def pred_var(self,x):
+        assert (not self.X is None) and (not self.Y is None)
         c = self.kernel(x,x) + 1/self.beta
         k = self.kernel(x,self.X)
         return c - k.T.dot(self.invCov).dot(k)
