@@ -41,41 +41,35 @@ class GaussianProcessRegressor(object):
         self.cov = self.calc_cov(X)
         self.invCov = np.linalg.inv(self.cov)
 
-    def pred_mean(self,x):
+    def predict(self,x,return_std=False):
         """
         Parameters
         ----------
         x : ndarray
             (n_samples,n_dim)
+        return_std : bool,False
         """
         assert (not self.X is None) and (not self.Y is None)
         assert x.ndim==2
         k = np.zeros(len(self.X))
         mu = np.zeros(len(x))
         
-        for inputIx,ix in enumerate(x):
-            for i,x_ in enumerate(self.X):
-                k[i] = self.kernel(ix,x_)
-            mu[inputIx] = k[None,:].dot(self.invCov).dot(self.Y)
-        return mu
-    
-    def pred_var(self,x):
-        """
-        Parameters
-        ----------
-        x : ndarray
-            (n_samples,n_dim)
-        """
-        assert (not self.X is None) and (not self.Y is None)
-        assert x.ndim==2
+        if not return_std:
+            for sampleIx,xi in enumerate(x):
+                for i,x_ in enumerate(self.X):
+                    k[i] = self.kernel(xi,x_)
+                mu[sampleIx] = k[None,:].dot(self.invCov).dot(self.Y)
+            return mu
+
         c = np.zeros(len(x))
         for sampleIx,xi in enumerate(x):
             c[sampleIx] = self.kernel(xi,xi) + 1/self.beta
             k = np.zeros(len(self.X))
             for i,x_ in enumerate(self.X):
                 k[i] = self.kernel(xi,x_)
+            mu[sampleIx] = k[None,:].dot(self.invCov).dot(self.Y)
             c[sampleIx] -= k.T.dot(self.invCov).dot(k)
-        return c
+        return mu,np.sqrt(c)
 
     def _define_calc_cov(self):
         def calc_cov(X):
