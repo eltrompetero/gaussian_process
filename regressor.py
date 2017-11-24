@@ -1,22 +1,23 @@
 from __future__ import division
 import numpy as np
 from numba import jit
+from scipy.spatial.distance import pdist,squareform
 
 class GaussianProcessRegressor(object):
     def __init__(self,kernel,beta):
         """
-        Params:
+        For any d-dimensional input and one dimensional output. From Bishop.
+
+        Parameters
         -------
         kernel (function)
-            kernel(x,y) that can take two data points and calculate the distance according to the kernel. Must
-            be a nopython jit function.
+            kernel(x,y) that can take two sets of data points and calculate the distance according to the
+            kernel. Must be a nopython jit function.
         beta (float)
-            variance of noise in observations
+            Inverse variance of noise in observations
         """
         self.kernel = kernel
         self.beta = beta
-        self.pred_mean = np.vectorize(self.pred_mean)
-        self.pred_var = np.vectorize(self.pred_var) 
         self._define_calc_cov()
 
         self.cov = None
@@ -33,42 +34,54 @@ class GaussianProcessRegressor(object):
         X
             n_samples x n_dim. Input.
         Y
-            Target variable.
+            Measured target variable.
         """
         assert len(X)==len(Y)
-        self.X,self.Y = X,Y
+        self.X,self.Y = np.array(X),np.array(Y)
         self.cov = self.calc_cov(X)
         self.invCov = np.linalg.inv(self.cov)
 
     def pred_mean(self,x):
         """
-        This is vectorized in __init__().
+        Parameters
+        ----------
+        x : ndarray
+            (n_samples,n_dim)
         """
         assert (not self.X is None) and (not self.Y is None)
-        k = self.kernel(x,self.X)
-        mu = k.T.dot(self.invCov).dot(self.Y)
+        assert x.ndim==2
+        k = np.zeros(len(self.X))
+        mu = np.zeros(len(x))
+        
+        for inputIx,ix in enumerate(x):
+            for i,x_ in enumerate(self.X):
+                k[i] = self.kernel(ix,x_)
+            mu[inputIx] = k[None,:].dot(self.invCov).dot(self.Y)
         return mu
     
     def pred_var(self,x):
+        """
+        Parameters
+        ----------
+        x : ndarray
+            (n_samples,n_dim)
+        """
         assert (not self.X is None) and (not self.Y is None)
-        c = self.kernel(x,x) + 1/self.beta
-        k = self.kernel(x,self.X)
-        return c - k.T.dot(self.invCov).dot(k)
+        assert x.ndim==2
+        c = np.zeros(len(x))
+        for sampleIx,xi in enumerate(x):
+            c[sampleIx] = self.kernel(xi,xi) + 1/self.beta
+            k = np.zeros(len(self.X))
+            for i,x_ in enumerate(self.X):
+                k[i] = self.kernel(xi,x_)
+            c[sampleIx] -= k.T.dot(self.invCov).dot(k)
+        return c
 
     def _define_calc_cov(self):
-        kernel,beta = self.kernel,self.beta
-
-        @jit(nopython=True)
         def calc_cov(X):
-            nSamples = len(X)
-            cov = np.zeros((nSamples,nSamples))
-            for i in xrange(nSamples):
-                for j in xrange(i,nSamples):
-                    cov[i,j] = kernel(X[i],X[j])
-                    if i==j:
-                        cov[i,i] += 1/beta
-                    else:
-                        cov[j,i] = cov[i,j]
+            cov = squareform(pdist(X,metric=self.kernel))
+            for i,x in enumerate(X):
+                cov[i,i] += self.kernel(x,x) + 1/self.beta
             return cov
         self.calc_cov = calc_cov
 
