@@ -9,11 +9,11 @@ class GaussianProcessRegressor(object):
         For any d-dimensional input and one dimensional output. From Bishop.
 
         Parameters
-        -------
-        kernel (function)
+        ----------
+        kernel : function
             kernel(x,y) that can take two sets of data points and calculate the distance according to the
             kernel. Must be a nopython jit function.
-        beta (float)
+        beta : float
             Inverse variance of noise in observations
         """
         self.kernel = kernel
@@ -27,13 +27,11 @@ class GaussianProcessRegressor(object):
 
     def fit(self,X,Y):
         """
-        2016-02-07
-
-        Params:
-        -------
-        X
+        Parameters
+        ----------
+        X : ndarray
             n_samples x n_dim. Input.
-        Y
+        Y : ndarray
             Measured target variable.
         """
         assert len(X)==len(Y)
@@ -46,8 +44,13 @@ class GaussianProcessRegressor(object):
         Parameters
         ----------
         x : ndarray
-            (n_samples,n_dim)
+            Dim (n_samples,n_dim).
         return_std : bool,False
+
+        Returns
+        -------
+        mu : ndarray
+        err : ndarray
         """
         assert (not self.X is None) and (not self.Y is None)
         assert x.ndim==2
@@ -72,13 +75,20 @@ class GaussianProcessRegressor(object):
         return mu,np.sqrt(c)
 
     def _define_calc_cov(self):
+        """Slow way of calculating covariance matrix."""
         def calc_cov(X):
             cov = squareform(pdist(X,metric=self.kernel))
             for i,x in enumerate(X):
                 cov[i,i] += self.kernel(x,x) + 1/self.beta
             return cov
         self.calc_cov = calc_cov
-
+    
+    def log_likelihood(self):
+        """Log-likelihood of the current state of the GPR.
+        """
+        return ( -.5*np.log(np.linalg.det(self.cov)) 
+                 -.5*self.X.dot(np.linalg.inv(self.cov)).dot(self.X)
+                 -len(self.X)/2*np.log(2*np.pi) )
 
 @jit(nopython=True)
 def calc_cov(X,kernel):
