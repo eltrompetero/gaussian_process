@@ -87,7 +87,7 @@ class GaussianProcessRegressor(object):
         """Log-likelihood of the current state of the GPR.
         """
         return ( -.5*np.log(np.linalg.det(self.cov)) 
-                 -.5*self.X.dot(np.linalg.inv(self.cov)).dot(self.X)
+                 -.5*self.Y.dot(np.linalg.inv(self.cov)).dot(self.Y)
                  -len(self.X)/2*np.log(2*np.pi) )
 
 @jit(nopython=True)
