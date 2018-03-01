@@ -86,7 +86,11 @@ class GaussianProcessRegressor(object):
     def log_likelihood(self):
         """Log-likelihood of the current state of the GPR.
         """
-        return ( -.5*np.log(np.linalg.det(self.cov)) 
+        det=np.linalg.slogdet(self.cov)
+        if det[0]<0 and det[1]<-10:
+            det=(1.,-np.inf)
+        assert det[0]>0,(det,self.cov.min())
+        return ( -.5*det[1]
                  -.5*self.Y.dot(np.linalg.inv(self.cov)).dot(self.Y)
                  -len(self.X)/2*np.log(2*np.pi) )
 
