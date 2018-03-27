@@ -47,12 +47,15 @@ class GaussianProcessRegressor(object):
         self.cov = self.calc_cov(X)
         self.invCov = np.linalg.inv(self.cov)
 
-    def predict(self,x,return_std=False):
+    def predict(self,x,X=None,Y=None,inv_cov=None,return_std=False):
         """
         Parameters
         ----------
         x : ndarray
             Dim (n_samples,n_dim).
+        X : ndarray
+        Y : ndarray
+        inv_cov : ndarray
         return_std : bool,False
 
         Returns
@@ -60,27 +63,86 @@ class GaussianProcessRegressor(object):
         mu : ndarray
         err : ndarray
         """
-        assert (not self.X is None) and (not self.Y is None)
+        # Check args.
+        if X is None:
+            X=self.X
+            assert (not X is None) 
+        if Y is None:
+            Y=self.Y
+            assert (not Y is None)
         assert x.ndim==2
-        k = np.zeros(len(self.X))
+        if inv_cov is None:
+            inv_cov=self.invCov
+        else:
+            assert inv_cov.shape[0]==inv_cov.shape[1]
+        k = np.zeros(len(X))
         mu = np.zeros(len(x))
         
+        # Case where only predicted means are returned.
         if not return_std:
             for sampleIx,xi in enumerate(x):
-                for i,x_ in enumerate(self.X):
+                for i,x_ in enumerate(X):
                     k[i] = self.kernel(xi,x_)
-                mu[sampleIx] = k[None,:].dot(self.invCov).dot(self.Y)
+                mu[sampleIx] = k[None,:].dot(inv_cov).dot(Y)
             return mu
-
+        
+        # Case where both means and errors are returned.
         c = np.zeros(len(x))
         for sampleIx,xi in enumerate(x):
             c[sampleIx] = self.kernel(xi,xi) + 1/self.beta
-            k = np.zeros(len(self.X))
-            for i,x_ in enumerate(self.X):
+            k = np.zeros(len(X))
+            for i,x_ in enumerate(X):
                 k[i] = self.kernel(xi,x_)
-            mu[sampleIx] = k[None,:].dot(self.invCov).dot(self.Y)
-            c[sampleIx] -= k.T.dot(self.invCov).dot(k)
+            mu[sampleIx] = k[None,:].dot(inv_cov).dot(Y)
+            c[sampleIx] -= k.T.dot(inv_cov).dot(k)
         return mu,np.sqrt(c)
+
+    def leave_one_out_predict(self,x,i,return_std=False):
+        """Prediction at x when ith data point from training data is left out. This is simply calculated
+        by leaving the ith col and row out from the covariance matrix.
+
+        Parameters
+        ----------
+        x : ndarray
+        i : int
+            Index of training data point to leave out.
+        return_std : bool,False
+
+        Returns
+        -------
+        y : ndarray
+            For each row of x, a vector of leave one out predictions is returns such that y is of
+            dim (n_samples,n_training_sample).
+        """
+        n=self.invCov.shape[0]
+        X=self.X[np.delete(range(n),i,axis=0)]
+        Y=self.Y[np.delete(range(n),i,axis=0)]
+        invCov=self.invCov[np.delete(range(n),i),:][:,np.delete(range(n),i)]
+
+        return self.predict(x,X=X,Y=Y,inv_cov=invCov,return_std=return_std)
+
+    def ocv_error(self):
+        """Calculate ordinary cross validation error on point x with measured function value y. This
+        is a sum of squared errors on the model's prediction at x.
+
+        This is equivalent to the negative log likelihood.
+
+        Parameters
+        ----------
+        x : ndarray
+        y : ndarray
+
+        Returns
+        -------
+        prediction_err : float
+        """
+        nSample=len(self.X)
+        squaredErr=0
+
+        for i in xrange(nSample):
+            ypred,std=self.leave_one_out_predict(self.X[i][None,:],i,return_std=True)
+            squaredErr+=(ypred-self.Y[i])**2/2/std**2
+        return squaredErr
 
     def _define_calc_cov(self):
         """Slow way of calculating covariance matrix."""
@@ -113,4 +175,12 @@ def calc_cov(X,kernel):
                 cov[j,i] = cov[i,j]
     return cov
 
-
+def define_rbf(el):
+    """A simple rbf kernel with length scale."""
+    @jit(nopython=True)
+    def rbf(x,y):
+        d=0
+        for i in xrange(len(x)):
+            d+=(x[i]-y[i])**2
+        return np.exp(-np.sqrt(d)/2/el**2)
+    return rbf
