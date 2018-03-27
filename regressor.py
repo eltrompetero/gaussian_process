@@ -1,7 +1,14 @@
+# =============================================================================================== #
+# Module for Gaussian process regression.
+# Author: Eddie Lee, edlee@alumni.princeton.edu
+# =============================================================================================== #
+
 from __future__ import division
 import numpy as np
 from numba import jit
 from scipy.spatial.distance import pdist,squareform
+
+
 
 class GaussianProcessRegressor(object):
     def __init__(self,kernel,beta):
@@ -14,7 +21,8 @@ class GaussianProcessRegressor(object):
             kernel(x,y) that can take two sets of data points and calculate the distance according to the
             kernel. Must be a nopython jit function.
         beta : float
-            Inverse variance of noise in observations
+            Inverse variance of noise in observations. In other words, 1/beta is added to the
+            diagonal entries of the covariance matrix.
         """
         self.kernel = kernel
         self.beta = beta
@@ -87,8 +95,6 @@ class GaussianProcessRegressor(object):
         """Log-likelihood of the current state of the GPR.
         """
         det=np.linalg.slogdet(self.cov)
-        if det[0]<0 and det[1]<-10:
-            det=(1.,-np.inf)
         assert det[0]>0,(det,self.cov.min())
         return ( -.5*det[1]
                  -.5*self.Y.dot(np.linalg.inv(self.cov)).dot(self.Y)
