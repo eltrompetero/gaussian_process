@@ -114,18 +114,16 @@ class GaussianProcessRegressor(object):
             For each row of x, a vector of leave one out predictions is returns such that y is of
             dim (n_samples,n_training_sample).
         """
-        n=self.invCov.shape[0]
+        n=self.cov.shape[0]
         X=self.X[np.delete(range(n),i,axis=0)]
         Y=self.Y[np.delete(range(n),i,axis=0)]
-        invCov=self.invCov[np.delete(range(n),i),:][:,np.delete(range(n),i)]
+        invCov=np.linalg.inv( self.cov[np.delete(range(n),i),:][:,np.delete(range(n),i)] )
 
         return self.predict(x,X=X,Y=Y,inv_cov=invCov,return_std=return_std)
 
     def ocv_error(self):
-        """Calculate ordinary cross validation error on point x with measured function value y. This
-        is a sum of squared errors on the model's prediction at x.
-
-        This is equivalent to the negative log likelihood.
+        """Calculate ordinary cross validation error on point x with measured function value y.
+        https://en.wikipedia.org/wiki/Projection_matrix.
 
         Parameters
         ----------
@@ -134,15 +132,31 @@ class GaussianProcessRegressor(object):
 
         Returns
         -------
-        prediction_err : float
+        ocv : float
         """
+        inv=np.linalg.inv
         nSample=len(self.X)
-        squaredErr=0
+        hatMatrix=self.X.dot(inv(self.X.T.dot(self.X))).dot(self.X.T)
+        ypred=self.predict(self.X)
+        return np.mean(( (self.Y-ypred)/(1-hatMatrix[np.diag_indices(nSample)]) )**2)
 
-        for i in xrange(nSample):
-            ypred,std=self.leave_one_out_predict(self.X[i][None,:],i,return_std=True)
-            squaredErr+=(ypred-self.Y[i])**2/2/std**2
-        return squaredErr
+    def gcv_error(self):
+        """Calculate generalized cross validation error on point x with measured function value y.
+
+        Parameters
+        ----------
+        x : ndarray
+        y : ndarray
+
+        Returns
+        -------
+        gcv : float
+        """
+        inv=np.linalg.inv
+        nSample=len(self.X)
+        hatMatrix=self.X.dot(inv(self.X.T.dot(self.X))).dot(self.X.T)
+        ypred=self.predict(self.X)
+        return np.mean( (self.Y-ypred)**2 )/(1-np.trace(hatMatrix)/nSample)**2
 
     def _define_calc_cov(self):
         """Slow way of calculating covariance matrix."""
