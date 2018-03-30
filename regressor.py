@@ -7,6 +7,7 @@ from __future__ import division
 import numpy as np
 from numba import jit
 from scipy.spatial.distance import pdist,squareform
+from itertools import combinations
 
 
 
@@ -159,12 +160,17 @@ class GaussianProcessRegressor(object):
         return np.mean( (self.Y-ypred)**2 )/(1-np.trace(hatMatrix)/nSample)**2
 
     def _define_calc_cov(self):
-        """Slow way of calculating covariance matrix."""
-        def calc_cov(X):
-            cov = squareform(pdist(X,metric=self.kernel))
-            for i,x in enumerate(X):
-                cov[i,i] += self.kernel(x,x) + 1/self.beta
+        """For calculating covariance matrix. Could be sped up by jitting everything."""
+        #@jit(nopython=True)
+        def calc_cov(X,kernel=self.kernel):
+            nSamples = len(X)
+            cov = np.zeros((nSamples,nSamples))
+            for i,j in combinations(range(nSamples),2):
+                cov[i,j] = kernel(X[i],X[j])
+            for i in xrange(nSamples):
+                cov[i,i] += 1/self.beta
             return cov
+
         self.calc_cov = calc_cov
     
     def log_likelihood(self):
