@@ -25,6 +25,8 @@ class GaussianProcessRegressor(object):
             Inverse variance of noise in observations. In other words, 1/beta is added to the
             diagonal entries of the covariance matrix.
         """
+        assert beta>0
+
         self.kernel = kernel
         self.beta = beta
         self._define_calc_cov()
@@ -44,6 +46,7 @@ class GaussianProcessRegressor(object):
             Measured target variable.
         """
         assert len(X)==len(Y)
+
         self.X,self.Y = np.array(X),np.array(Y)
         self.cov = self.calc_cov(X)
         self.invCov = np.linalg.inv(self.cov)
@@ -96,6 +99,12 @@ class GaussianProcessRegressor(object):
                 k[i] = self.kernel(xi,x_)
             mu[sampleIx] = k[None,:].dot(inv_cov).dot(Y)
             c[sampleIx] -= k.T.dot(inv_cov).dot(k)
+        
+        # For debugging purposes. In case some of these values are very small and potentially
+        # stemming from precision and not a bad kernel.
+        if (c<0).any():
+            print "Estimated errors are not all positive. Printing negative entries:"
+            print c[c<0]
         return mu,np.sqrt(c)
 
     def leave_one_out_predict(self,x,i,return_std=False):
