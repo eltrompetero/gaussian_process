@@ -61,6 +61,7 @@ class GaussianProcessRegressor(object):
         Y : ndarray
         inv_cov : ndarray
         return_std : bool,False
+        verbose : bool,True
 
         Returns
         -------
