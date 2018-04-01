@@ -197,18 +197,24 @@ class GaussianProcessRegressor(object):
         """
         assert not self.X is None,"Must train GPR on some data first."
 
+        # Covariance matrix should be symmetric.
+        if np.linalg.norm(self.cov-self.cov.T)!=0:
+            print "ERR: Covariance matrix is not symmetrix."
+        else:
+            print "OK: Covariance matrix is symmetric."
+
         # Check that covariance matrix is well conditioned.
         det=np.linalg.slogdet(self.cov)
         if det[0]==-1:
             print "ERR: Determinant is negative."
         elif det[1]<-10:
-            print "ERR: Covariance matrix is ill-conditioned."
+            print "ALERT: Covariance matrix is ill-conditioned."
         else:
             print "OK: Covariance matrix is okay."
 
         # Check that errors are positive.
-        mu,std=self.predict(self.X,return_std=True)
-        if (std<0).any():
+        mu,std=self.predict(self.X,return_std=True,verbose=False)
+        if np.isnan(std).any():
             print "ERR: Some errors are negative."
         else:
             print "OK: All errors are positive."
