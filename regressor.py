@@ -51,7 +51,7 @@ class GaussianProcessRegressor(object):
         self.cov = self.calc_cov(X)
         self.invCov = np.linalg.inv(self.cov)
 
-    def predict(self,x,X=None,Y=None,inv_cov=None,return_std=False):
+    def predict(self,x,X=None,Y=None,inv_cov=None,return_std=False,verbose=True):
         """
         Parameters
         ----------
@@ -102,7 +102,7 @@ class GaussianProcessRegressor(object):
         
         # For debugging purposes. In case some of these values are very small and potentially
         # stemming from precision and not a bad kernel.
-        if (c<0).any():
+        if (c<0).any() and verbose:
             print "Estimated errors are not all positive. Printing negative entries:"
             print c[c<0]
         return mu,np.sqrt(c)
