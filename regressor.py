@@ -175,7 +175,7 @@ class GaussianProcessRegressor(object):
             nSamples = len(X)
             cov = np.zeros((nSamples,nSamples))
             for i,j in combinations(range(nSamples),2):
-                cov[i,j] = kernel(X[i],X[j])
+                cov[i,j] = cov[j,i] = kernel(X[i],X[j])
             for i in xrange(nSamples):
                 cov[i,i] += 1/self.beta
             return cov
