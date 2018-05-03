@@ -15,7 +15,7 @@ from scipy.optimize import minimize
 class BlockGPR(object):
     def __init__(self,n,dist=None):
         self.n=n  # no. of disjoint blocks
-        self.dist=dist or lambda x,y:np.linalg.norm(x-y)
+        self.dist=dist or (lambda x,y:np.linalg.norm(x-y))
         
         # Default block specific parameters.
         self.noisei=np.zeros(n)+.5
@@ -558,3 +558,30 @@ def define_rbf(el):
             d+=(x[i]-y[i])**2
         return np.exp(-np.sqrt(d)/2/el**2)
     return rbf
+
+def define_matern_kernel(coeff,nu,c):
+    """
+    Parameters
+    ----------
+    nu : float
+        Smoothness parameter. When nu->inf, we have the RBF kernel.
+    c : float
+        Length scale.
+    
+    Returns
+    -------
+    matern_kernel : function
+        Takes list of distances x. Keyword args nu and c set to given default values.
+    """
+    from scipy.special import gamma,kv
+    assert c>0
+    assert nu>0
+    def f(x,nu=nu,c=c):
+        x=np.array(x)
+        if x.shape==():
+            x=np.array([x])
+        y=coeff*2**(1-nu)/gamma(nu)*(x/c)**nu * kv(nu,x/c)
+        y[x==0]=coeff
+        
+        return y
+    return f

@@ -33,7 +33,7 @@ def test_BlockGPR():
     # Generate samples from GPR and find parameters.
 
 def test_regressor():
-    kernel=lambda x,y:exp(-(x-y)**2/2)
+    kernel=lambda x,y:np.exp(-(x-y)**2/2)
     beta=10
     gpr=GaussianProcessRegressor(kernel,beta)
 
