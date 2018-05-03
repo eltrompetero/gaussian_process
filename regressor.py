@@ -8,11 +8,285 @@ import numpy as np
 from numba import jit
 from scipy.spatial.distance import pdist,squareform
 from itertools import combinations
+from scipy.optimize import minimize
+
+
+
+class BlockGPR(object):
+    def __init__(self,n,dist=None):
+        self.n=n  # no. of disjoint blocks
+        self.dist=dist or lambda x,y:np.linalg.norm(x-y)
+        
+        # Default block specific parameters.
+        self.noisei=np.zeros(n)+.5
+        self.mui=np.zeros(n)
+        self.lengthi=np.zeros(n)+1
+        self.coeffi=np.ones(n)
+        self.smoothnessi=np.zeros(n)+.5
+
+        # Default parameters on common landscape shared by all block kernels.
+        self.noiseAll=.5
+        self.muAll=0.
+        self.lengthAll=1
+        self.coeffAll=1
+        self.smoothnessAll=.5
+        
+        self._setup_kernels()
+        self._define_kernel()
+        
+        self._update_gp()
+        
+    def _update_gp(self):
+        self.gp=GaussianProcessRegressor(self.kernel,np.inf)
+    
+    def _setup_kernels(self):
+        """First time instance is declared."""
+        self.blockKernel=[]
+        for el,coef,nu in zip(self.lengthi,self.coeffi,self.smoothnessi):
+            self.blockKernel.append(define_matern_kernel(coef,nu,el))
+        
+        self.commonKernel=define_matern_kernel(self.coeffAll,
+                                               self.smoothnessAll,
+                                               self.lengthAll)
+            
+    def update_block_kernels(self,noisei=None,
+                             mui=None,
+                             lengthi=None,
+                             coeffi=None,
+                             smoothnessi=None):
+        """Update each block kernel with new parameters."""
+        if noisei is None:
+            noisei=self.noisei
+        else:
+            self.noisei=noisei
+        if mui is None:
+            mui=self.mui
+        else:
+            self.mui=mui
+        if lengthi is None:
+            lengthi=self.lengthi
+        else:
+            self.lengthi=lengthi
+        if coeffi is None:
+            coeffi=self.coeffi
+        else:
+            self.coeffi=coeffi
+        if smoothnessi is None:
+            smoothnessi=self.smoothnessi
+        else:
+            self.smoothnessi=smoothnessi
+        
+        for i in xrange(self.n):
+            self.blockKernel[i]=define_matern_kernel(coeffi[i],
+                                                     smoothnessi[i],
+                                                     lengthi[i])
+        self._define_kernel()
+            
+    def update_common_kernel(self,noise=None,
+                             mu=None,
+                             length=None,
+                             coeff=None,
+                             smoothness=None):
+        """Update common kernel with new parameters."""
+        if noise is None:
+            noise=self.noiseAll
+        else:
+            self.noiseAll=noise
+        if mu is None:
+            mu=self.muAll
+        else:
+            self.muAll=mu
+        if length is None:
+            length=self.lengthAll
+        else:
+            self.lengthAll=length
+        if coeff is None:
+            coeff=self.coeffAll
+        else:
+            self.coeffAll=coeff
+        if smoothness is None:
+            smoothness=self.smoothnessAll
+        else:
+            self.smoothnessAll=smoothness
+            
+        self.commonKernel=define_matern_kernel(coeff,
+                                               smoothness,
+                                               length)
+        self._define_kernel()
+    
+    def _define_kernel(self):
+        """Define kernel function with current set of block and common kernels into
+        self.kernel. Update under-the-hood GP.
+        """
+        def k(x,y,
+              noise=self.noiseAll,
+              dist=self.dist,
+              commonKernel=self.commonKernel,
+              blockKernel=self.blockKernel):
+            # Calculate the underlying kernel for all subjects.
+            d=dist(x[1:],y[1:])
+            cov=commonKernel(d)
+
+            # Add noise if the windows are the same.
+            if np.isclose(d,0,rtol=0,atol=1e-15):
+                cov+=noise**2
+
+            # Add individual specific covariance.
+            if x[0]==y[0]:
+                cov+=blockKernel[int(x[0])](d)
+                if np.isclose(d,0,rtol=0,atol=1e-15):
+                    cov+=noise**2
+            return cov
+        
+        self.kernel=k
+        
+        # Update GPR under-the-hood that relies on this kernel.
+        self._update_gp()
+        
+    def train(self,X,Y):
+        assert X.ndim==2
+        Y=Y.copy()
+        
+        # Subtract predicted means.
+        for i,x in enumerate(X):
+            Y[i]-=self.mui[int(x[0])]
+        
+        self.gp.fit(X,Y)
+
+    def predict(self,X):
+        assert X.ndim==2
+        Y=self.gp.predict(X)
+        
+        # Account for predicted means.
+        for i,x in enumerate(X):
+            Y[i]+=self.mui[int(x[0])]
+            
+        return Y
+    
+    def optimize_hyperparameters(self,X,Y,
+                                 initial_guess=None,
+                                 common=True,
+                                 block=True,
+                                 return_full_output=False):
+        """Optimize hyperparameters. Can optimize block specific parameters and common 
+        parameters together or separately.
+        
+        Parameters
+        ----------
+        X : ndarray
+        Y : ndarray
+        initial_guess : ndarray
+        common : bool,True
+            If True, optimize common hyperparameters shared between blocks.
+        block : bool,True
+            If True, optimize block specific hyperparameters.
+        return_full_output : bool,True
+            Switch for returning output of scipy.optimize.minimize.
+            
+        Returns
+        -------
+        minimize_output : dict
+        """
+        if initial_guess is None:
+            initial_guess=np.ones(5+self.n*5)
+        else:
+            assert len(initial_guess)==(5+self.n*5)
+        
+        # Save current state.
+
+        # Set up optimization.
+        # The first 5 parameters are for the common kernel.
+        if common and block:
+            def update_parameters(params):
+                params=list(params)
+                assert len(params)==(5+5*self.n)
+                
+                paramsCo=params[:5]
+                del params[:5]
+                if not self._check_common_params(paramsCo): return False
+                
+                paramsBlock=[]
+                for i in xrange(5):
+                    paramsBlock.append(np.array(params[:self.n]))
+                    del params[:self.n]
+                if not self._check_block_params(paramsBlock): return False
+                
+                self.update_common_kernel(*paramsCo)
+                self.update_block_kernels(*paramsBlock)
+                return True
+                
+        elif common:
+            def update_parameters(paramsCo):
+                assert len(paramsCo)==5
+                if not self._check_common_params(paramsCo): return False
+                self.update_common_kernel(*paramsCo)
+                return True
+                
+        elif block:
+            def update_parameters(params):
+                assert len(params)==(5*self.n)
+                paramsBlock=[]
+                for i in xrange(5):
+                    paramsBlock.append(params[:self.n])
+                    del params[:self.n]
+                if not self._check_block_params(paramsBlock): return False
+                
+                self.update_block_kernels(*paramsBlock)
+                return True
+                
+        def neg_log_L(params):
+            if not update_parameters(params): return 1e30
+            self.train(X,Y)
+            return -self.gp.log_likelihood()
+                
+        # Run optimization.
+        soln=minimize(neg_log_L,initial_guess)
+        update_parameters(soln['x'])
+        if return_full_output:
+            return soln
+        
+    def print_params(self):
+        print "Common parameters"
+        print "Noise: %1.2f"%self.noiseAll
+        print "Mean: %1.2f"%self.muAll
+        print "Length: %1.2f"%self.lengthAll
+        print "Coeff: %1.2f"%self.coeffAll
+        print "Smoothness: %1.2f"%self.smoothnessAll
+        print ""
+        
+        print "Block parameters"
+        print "Noise:"
+        print self.noisei
+        print "Mean:"
+        print self.mui
+        print "Length:"
+        print self.lengthi
+        print "Coeff:"
+        print self.coeffi
+        print "Smoothness:"
+        print self.smoothnessi
+
+    @staticmethod
+    def _check_common_params(paramsCo):
+        if ( paramsCo[0]<=0 or 
+             paramsCo[2]<=0 or
+             paramsCo[3]<=0 or 
+             paramsCo[4]<=0 ): return False
+        return True
+    
+    @staticmethod
+    def _check_block_params(paramsBlock):
+        if ( (paramsBlock[0]<=0).any() or
+             (paramsBlock[2]<=0).any() or
+             (paramsBlock[3]<=0).any() or
+             (paramsBlock[4]<=0).any() ): return False
+        return True
+#end BlockGPR
 
 
 
 class GaussianProcessRegressor(object):
-    def __init__(self,kernel,beta):
+    def __init__(self,kernel,beta,approximate_cov=None):
         """
         For any d-dimensional input and one dimensional output. From Bishop.
 
@@ -30,6 +304,7 @@ class GaussianProcessRegressor(object):
         self.kernel = kernel
         self.beta = beta
         self._define_calc_cov()
+        self.approximate_cov=approximate_cov
 
         self.cov = None
         self.invCov = None
@@ -38,6 +313,9 @@ class GaussianProcessRegressor(object):
 
     def fit(self,X,Y):
         """
+        This only involves calculating the covariance matrix. The output Y is only taken in so that
+        it can be saved into this instance.
+
         Parameters
         ----------
         X : ndarray
@@ -45,11 +323,47 @@ class GaussianProcessRegressor(object):
         Y : ndarray
             Measured target variable.
         """
+        assert X.ndim==2
         assert len(X)==len(Y)
 
         self.X,self.Y = np.array(X),np.array(Y)
         self.cov = self.calc_cov(X)
-        self.invCov = np.linalg.inv(self.cov)
+        self.invCov = self.invert_cov(self.cov,self.approximate_cov)
+    
+    @staticmethod
+    def invert_cov(cov,approximate_cov=None):
+        """Invert covariance matrix. Implements approximation schemes.
+
+        Parameters
+        ----------
+        cov : ndarray
+        approximate_cov : tuple,None
+
+        Returns
+        -------
+        invCov : ndarray
+        """
+        if approximate_cov is None:
+            icov = np.linalg.inv(cov)
+
+        elif approximate_cov[0]=='low rank' or approximate_cov[0]=='lr':
+            rank=approximate_cov[1]
+
+            # Eigendecomposition.
+            el,v=np.linalg.eig(cov)
+            keepIx=np.argsort(np.abs(el))[::-1][:rank]
+            
+            # Construct low-rank approximation.
+            diag=np.eye(rank)*el[keepIx]
+            approxCov=v[:,keepIx].dot(diag).dot(v[:,keepIx].T)
+
+            print np.linalg.norm(approxCov-cov)
+            
+            icov=np.linalg.inv(approxCov)
+
+        else: raise Exception("Unavailable approximation scheme for covariance inversion.")
+
+        return icov
 
     def predict(self,x,X=None,Y=None,inv_cov=None,return_std=False,verbose=True):
         """
@@ -67,6 +381,7 @@ class GaussianProcessRegressor(object):
         -------
         mu : ndarray
         err : ndarray
+            Standard deviation of Gaussian process.
         """
         # Check args.
         if X is None:
