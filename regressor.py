@@ -178,7 +178,7 @@ class GaussianProcessRegressor(object):
             for i,j in combinations(range(nSamples),2):
                 cov[i,j] = cov[j,i] = kernel(X[i],X[j])
             for i in xrange(nSamples):
-                cov[i,i] += 1/self.beta
+                cov[i,i] += 1/self.beta + kernel(X[i],X[i])
             return cov
 
         self.calc_cov = calc_cov
