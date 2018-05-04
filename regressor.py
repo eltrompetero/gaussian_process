@@ -193,6 +193,7 @@ class BlockGPR(object):
                                  common=True,
                                  block=True,
                                  fix_params_function=None,
+                                 reg_function=None,
                                  return_full_output=False):
         """Optimize hyperparameters. Can optimize block specific parameters and common 
         parameters together or separately.
@@ -221,6 +222,8 @@ class BlockGPR(object):
             kernel, each sequential set of self.n correspond to the block kernels and the last
             parameter is the common noise term. All the sets of parameters are ordered as noise, mu,
             length, coeff, smoothness.
+        reg_function : function,None
+            Function for imposing regularization on the optimization given parameters.
         return_full_output : bool,True
             Switch for returning output of scipy.optimize.minimize.
             
@@ -248,6 +251,8 @@ class BlockGPR(object):
         if fix_params_function is None:
             fix_params_function=lambda x:None
         fix_params_function(initial_guess)
+        if reg_function is None:
+            reg_function=lambda x:0.
 
         # Save current state.
 
@@ -301,7 +306,7 @@ class BlockGPR(object):
         def neg_log_L(params):
             if not update_parameters(params): return 1e30
             self.train(X,Y)
-            return -self.gp.log_likelihood()
+            return -self.gp.log_likelihood()+reg_function(params)
                 
         # Run optimization.
         soln=minimize(neg_log_L,initial_guess)
