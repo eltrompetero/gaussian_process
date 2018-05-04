@@ -16,6 +16,8 @@ class BlockGPR(object):
     """
     Gaussian process regression with blocked covariance matrix. There are covariance terms specific
     to each block and a shared common covariance term across all blocks.
+
+    This relies on GaussianProcessRegressor for the underlying GPR model.
     """
     def __init__(self,n,dist=None):
         """
@@ -190,6 +192,7 @@ class BlockGPR(object):
                                  initial_guess=None,
                                  common=True,
                                  block=True,
+                                 fix_params_function=None,
                                  return_full_output=False):
         """Optimize hyperparameters. Can optimize block specific parameters and common 
         parameters together or separately.
@@ -206,6 +209,18 @@ class BlockGPR(object):
             If True, optimize common hyperparameters shared between blocks.
         block : bool,True
             If True, optimize block specific hyperparameters.
+        fix_params_function : function,None
+            If a function is passed, this can be used to fix particular parameters to certain
+            values. This is an easy way to customize the parameter optimization code without making
+            it overly complicated here.
+
+            This will be called in update_parameters() at each iteration of the minimization
+            routine. Parameter list should be changed in place.
+
+            If both common and block switches are set, the first 5 parameters are for the common
+            kernel, each sequential set of self.n correspond to the block kernels and the last
+            parameter is the common noise term. All the sets of parameters are ordered as noise, mu,
+            length, coeff, smoothness.
         return_full_output : bool,True
             Switch for returning output of scipy.optimize.minimize.
             
@@ -218,11 +233,11 @@ class BlockGPR(object):
         assert common or block
         if initial_guess is None:
             if common and block:
-                initial_guess=np.ones(5+self.n*5+1)
+                initial_guess=np.ones(5+self.n*5+1)/3
             elif common:
-                initial_guess=np.ones(5+1)
+                initial_guess=np.ones(5+1)/3
             elif block:
-                initial_guess=np.ones(self.n*5+1)
+                initial_guess=np.ones(self.n*5+1)/3
         else:
             if common and block:
                 assert len(initial_guess)==(5+self.n*5+1)
@@ -230,7 +245,10 @@ class BlockGPR(object):
                 assert len(initial_guess)==(5+1)
             elif block:
                 assert len(initial_guess)==(self.n*5+1)
-        
+        if fix_params_function is None:
+            fix_params_function=lambda x:None
+        fix_params_function(initial_guess)
+
         # Save current state.
 
         # Set up optimization.
@@ -239,6 +257,7 @@ class BlockGPR(object):
         # of the entire covariance matrix.
         if common and block:
             def update_parameters(params):
+                fix_params_function(params)
                 params=list(params)
                 
                 paramsCo=params[:5]
@@ -259,6 +278,7 @@ class BlockGPR(object):
                 
         elif common:
             def update_parameters(paramsCo):
+                fix_params_function(paramsCo)
                 if not self._check_common_params(paramsCo): return False
                 self.update_noise(params[-1])
                 self.update_common_kernel(*paramsCo)
@@ -266,6 +286,7 @@ class BlockGPR(object):
                 
         elif block:
             def update_parameters(params):
+                fix_params_function(params)
                 paramsBlock=[]
                 for i in xrange(5):
                     paramsBlock.append(params[:self.n])
@@ -290,7 +311,6 @@ class BlockGPR(object):
         
     def print_params(self):
         print "Common parameters"
-        print "Diag: %1.2f"%self.noise
         print "Noise: %1.2f"%self.noiseCo
         print "Mean: %1.2f"%self.muCo
         print "Length: %1.2f"%self.lengthCo
@@ -309,6 +329,9 @@ class BlockGPR(object):
         print self.coeffi
         print "Smoothness:"
         print self.smoothnessi
+
+        print ""
+        print "Diag: %1.2f"%self.noise
 
     @staticmethod
     def _check_common_params(paramsCo):
@@ -550,6 +573,12 @@ class GaussianProcessRegressor(object):
         return ( -.5*det[1]
                  -.5*self.Y.dot(np.linalg.inv(self.cov)).dot(self.Y)
                  -len(self.X)/2*np.log(2*np.pi) )
+
+    def sample(self,cov=None,size=()):
+        from numpy.random import multivariate_normal
+        if cov is None:
+            cov=self.cov
+        return multivariate_normal( np.zeros(len(cov)),cov,size=size )
 
     def run_checks(self):
         """Run some basic checks to make sure GPR was fit okay.
