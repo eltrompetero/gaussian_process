@@ -9,6 +9,7 @@ def test_BlockGPR():
     X[:2,0]=0
     X[2:,0]=1
     Y=np.random.normal(size=4)
+    gpr.update_noise(1e-30)
     gpr.update_common_kernel(coeff=1.3)
     gpr.update_block_kernels(coeffi=np.array([.6,.7]))
     
@@ -42,3 +43,6 @@ def test_regressor():
     gpr.fit(X,Y)
 
     assert np.array_equal(gpr.cov.diagonal()[0],kernel(0,0))+1/beta
+
+if __name__=='__main__':
+    test_BlockGPR()
