@@ -13,7 +13,19 @@ from scipy.optimize import minimize
 
 
 class BlockGPR(object):
+    """
+    Gaussian process regression with blocked covariance matrix. There are covariance terms specific
+    to each block and a shared common covariance term across all blocks.
+    """
     def __init__(self,n,dist=None):
+        """
+        Parameters
+        ----------
+        n : int
+            Number of blocks.
+        dist : function,None
+            Distance function to use in symmetric kernel.
+        """
         self.n=n  # no. of disjoint blocks
         self.dist=dist or (lambda x,y:np.linalg.norm(x-y))
         
@@ -25,11 +37,15 @@ class BlockGPR(object):
         self.smoothnessi=np.zeros(n)+.5
 
         # Default parameters on common landscape shared by all block kernels.
-        self.noiseAll=.5
-        self.muAll=0.
-        self.lengthAll=1
-        self.coeffAll=1
-        self.smoothnessAll=.5
+        self.noiseCo=.5
+        self.muCo=0.
+        self.lengthCo=1
+        self.coeffCo=1
+        self.smoothnessCo=.5
+
+        # Noise term per data entry. This is independent noise per experimental run even if on the
+        # same block with the same parameters.
+        self.noise=.2
         
         self._setup_kernels()
         self._define_kernel()
@@ -37,7 +53,7 @@ class BlockGPR(object):
         self._update_gp()
         
     def _update_gp(self):
-        self.gp=GaussianProcessRegressor(self.kernel,np.inf)
+        self.gp=GaussianProcessRegressor(self.kernel,1/self.noise)
     
     def _setup_kernels(self):
         """First time instance is declared."""
@@ -45,9 +61,9 @@ class BlockGPR(object):
         for el,coef,nu in zip(self.lengthi,self.coeffi,self.smoothnessi):
             self.blockKernel.append(define_matern_kernel(coef,nu,el))
         
-        self.commonKernel=define_matern_kernel(self.coeffAll,
-                                               self.smoothnessAll,
-                                               self.lengthAll)
+        self.commonKernel=define_matern_kernel(self.coeffCo,
+                                               self.smoothnessCo,
+                                               self.lengthCo)
             
     def update_block_kernels(self,noisei=None,
                              mui=None,
@@ -89,37 +105,44 @@ class BlockGPR(object):
                              smoothness=None):
         """Update common kernel with new parameters."""
         if noise is None:
-            noise=self.noiseAll
+            noise=self.noiseCo
         else:
-            self.noiseAll=noise
+            self.noiseCo=noise
         if mu is None:
-            mu=self.muAll
+            mu=self.muCo
         else:
-            self.muAll=mu
+            self.muCo=mu
         if length is None:
-            length=self.lengthAll
+            length=self.lengthCo
         else:
-            self.lengthAll=length
+            self.lengthCo=length
         if coeff is None:
-            coeff=self.coeffAll
+            coeff=self.coeffCo
         else:
-            self.coeffAll=coeff
+            self.coeffCo=coeff
         if smoothness is None:
-            smoothness=self.smoothnessAll
+            smoothness=self.smoothnessCo
         else:
-            self.smoothnessAll=smoothness
+            self.smoothnessCo=smoothness
             
         self.commonKernel=define_matern_kernel(coeff,
                                                smoothness,
                                                length)
         self._define_kernel()
-    
+
+    def update_noise(self,noise=None):
+        if noise is None:
+            noise=self.noise
+        else:
+            self.noise=noise
+        self._update_gp()
+
     def _define_kernel(self):
         """Define kernel function with current set of block and common kernels into
         self.kernel. Update under-the-hood GP.
         """
         def k(x,y,
-              noise=self.noiseAll,
+              noise=self.noiseCo,
               dist=self.dist,
               commonKernel=self.commonKernel,
               blockKernel=self.blockKernel):
@@ -170,6 +193,9 @@ class BlockGPR(object):
                                  return_full_output=False):
         """Optimize hyperparameters. Can optimize block specific parameters and common 
         parameters together or separately.
+
+        Sets self.kernel and resets kernel for self.gp. self.gp has been reset. This means that you
+        should retrain it.
         
         Parameters
         ----------
@@ -187,19 +213,33 @@ class BlockGPR(object):
         -------
         minimize_output : dict
         """
+        # Check inputs.
+        assert X.ndim==2 and Y.ndim==1
+        assert common or block
         if initial_guess is None:
-            initial_guess=np.ones(5+self.n*5)
+            if common and block:
+                initial_guess=np.ones(5+self.n*5+1)
+            elif common:
+                initial_guess=np.ones(5+1)
+            elif block:
+                initial_guess=np.ones(self.n*5+1)
         else:
-            assert len(initial_guess)==(5+self.n*5)
+            if common and block:
+                assert len(initial_guess)==(5+self.n*5+1)
+            elif common:
+                assert len(initial_guess)==(5+1)
+            elif block:
+                assert len(initial_guess)==(self.n*5+1)
         
         # Save current state.
 
         # Set up optimization.
-        # The first 5 parameters are for the common kernel.
+        # The first 5 parameters are for the common kernel. The following parameters are for the
+        # block kernels in sets of 5. The final parameter is the common noise term on the diagonal
+        # of the entire covariance matrix.
         if common and block:
             def update_parameters(params):
                 params=list(params)
-                assert len(params)==(5+5*self.n)
                 
                 paramsCo=params[:5]
                 del params[:5]
@@ -210,27 +250,30 @@ class BlockGPR(object):
                     paramsBlock.append(np.array(params[:self.n]))
                     del params[:self.n]
                 if not self._check_block_params(paramsBlock): return False
-                
+
+                self.update_noise(params[-1])
+
                 self.update_common_kernel(*paramsCo)
                 self.update_block_kernels(*paramsBlock)
                 return True
                 
         elif common:
             def update_parameters(paramsCo):
-                assert len(paramsCo)==5
                 if not self._check_common_params(paramsCo): return False
+                self.update_noise(params[-1])
                 self.update_common_kernel(*paramsCo)
                 return True
                 
         elif block:
             def update_parameters(params):
-                assert len(params)==(5*self.n)
                 paramsBlock=[]
                 for i in xrange(5):
                     paramsBlock.append(params[:self.n])
                     del params[:self.n]
                 if not self._check_block_params(paramsBlock): return False
                 
+                self.update_noise(params[-1])
+
                 self.update_block_kernels(*paramsBlock)
                 return True
                 
@@ -247,11 +290,12 @@ class BlockGPR(object):
         
     def print_params(self):
         print "Common parameters"
-        print "Noise: %1.2f"%self.noiseAll
-        print "Mean: %1.2f"%self.muAll
-        print "Length: %1.2f"%self.lengthAll
-        print "Coeff: %1.2f"%self.coeffAll
-        print "Smoothness: %1.2f"%self.smoothnessAll
+        print "Diag: %1.2f"%self.noise
+        print "Noise: %1.2f"%self.noiseCo
+        print "Mean: %1.2f"%self.muCo
+        print "Length: %1.2f"%self.lengthCo
+        print "Coeff: %1.2f"%self.coeffCo
+        print "Smoothness: %1.2f"%self.smoothnessCo
         print ""
         
         print "Block parameters"
@@ -532,7 +576,7 @@ class GaussianProcessRegressor(object):
         if np.isnan(std).any():
             print "ERR: Some errors are negative."
         else:
-            print "OK: All errors are positive."
+            print "OK: Co errors are positive."
 #end GaussianProcessRegressor
 
 
