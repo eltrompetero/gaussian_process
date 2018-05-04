@@ -274,7 +274,8 @@ class BlockGPR(object):
                     paramsBlock.append(np.array(params[:self.n]))
                     del params[:self.n]
                 if not self._check_block_params(paramsBlock): return False
-
+                
+                if params[-1]<=0: return False
                 self.update_noise(params[-1])
 
                 self.update_common_kernel(*paramsCo)
@@ -285,7 +286,10 @@ class BlockGPR(object):
             def update_parameters(paramsCo):
                 fix_params_function(paramsCo)
                 if not self._check_common_params(paramsCo): return False
+
+                if params[-1]<=0: return False
                 self.update_noise(params[-1])
+
                 self.update_common_kernel(*paramsCo)
                 return True
                 
@@ -298,6 +302,7 @@ class BlockGPR(object):
                     del params[:self.n]
                 if not self._check_block_params(paramsBlock): return False
                 
+                if params[-1]<=0: return False
                 self.update_noise(params[-1])
 
                 self.update_block_kernels(*paramsBlock)
