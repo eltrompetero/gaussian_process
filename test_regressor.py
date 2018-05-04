@@ -1,3 +1,8 @@
+# =============================================================================================== #
+# Module for Gaussian process regression.
+# Author: Eddie Lee, edlee@alumni.princeton.edu
+# =============================================================================================== #
+
 from __future__ import division
 from regressor import *
 

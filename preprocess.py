@@ -1,4 +1,10 @@
+# =============================================================================================== #
+# Module for Gaussian process regression.
+# Author: Eddie Lee, edlee@alumni.princeton.edu
+#
 # Data preprocessing.
+# =============================================================================================== #
+
 from __future__ import division
 from misc.utils import unique_rows
 import numpy as np
