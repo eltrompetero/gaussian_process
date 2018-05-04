@@ -614,6 +614,10 @@ class GaussianProcessRegressor(object):
 #end GaussianProcessRegressor
 
 
+
+# =============================================================================================== #
+# Useful functions.
+# =============================================================================================== #
 @jit(nopython=True)
 def calc_cov(X,kernel):
     nSamples = len(X)
@@ -639,6 +643,8 @@ def define_rbf(el):
 
 def define_matern_kernel(coeff,nu,c):
     """
+    Define a function for calculating the Matern kernel.
+
     Parameters
     ----------
     nu : float
