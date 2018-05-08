@@ -8,7 +8,7 @@ import numpy as np
 from numba import jit
 from scipy.spatial.distance import pdist,squareform
 from itertools import combinations
-from scipy.optimize import minimize
+from scipy.optimize import minimize,minimize_scalar
 
 
 
@@ -194,7 +194,10 @@ class BlockGPR(object):
                                  block=True,
                                  fix_params_function=None,
                                  reg_function=None,
-                                 return_full_output=False):
+                                 check_bounds_function=None,
+                                 minimize_kw={},
+                                 return_full_output=False,
+                                 verbose=False):
         """Optimize hyperparameters. Can optimize block specific parameters and common 
         parameters together or separately.
 
@@ -224,6 +227,10 @@ class BlockGPR(object):
             length, coeff, smoothness.
         reg_function : function,None
             Function for imposing regularization on the optimization given parameters.
+        check_bounds_function : function,None
+            Function that returns True if all parameters are within bounds. This is run immediately
+            after new set of parameters are proposed, so it can be much faster to run checks on
+            parameters in this function rather than in reg_function.
         return_full_output : bool,True
             Switch for returning output of scipy.optimize.minimize.
             
@@ -253,6 +260,8 @@ class BlockGPR(object):
         fix_params_function(initial_guess)
         if reg_function is None:
             reg_function=lambda x:0.
+        if check_bounds_function is None:
+            check_bounds_function=lambda x:True
 
         # Save current state.
 
@@ -285,6 +294,8 @@ class BlockGPR(object):
         elif common:
             def update_parameters(paramsCo):
                 fix_params_function(paramsCo)
+                params=list(params)
+
                 if not self._check_common_params(paramsCo): return False
 
                 if params[-1]<=0: return False
@@ -296,6 +307,8 @@ class BlockGPR(object):
         elif block:
             def update_parameters(params):
                 fix_params_function(params)
+                params=list(params)
+
                 paramsBlock=[]
                 for i in xrange(5):
                     paramsBlock.append(params[:self.n])
@@ -307,15 +320,26 @@ class BlockGPR(object):
 
                 self.update_block_kernels(*paramsBlock)
                 return True
-                
-        def neg_log_L(params):
-            if not update_parameters(params): return 1e30
-            self.train(X,Y)
-            return -self.gp.log_likelihood()+reg_function(params)
-                
+        
+        if verbose:
+            def neg_log_L(params):
+                if not check_bounds_function(params):return 1e30
+                if not update_parameters(params): return 1e30
+                self.train(X,Y)
+                L=self.gp.neg_log_likelihood()+reg_function(params)
+                print "Cost=%1.3f"%L
+                return L
+        else:
+            def neg_log_L(params):
+                if not check_bounds_function(params):return 1e30
+                if not update_parameters(params): return 1e30
+                self.train(X,Y)
+                return self.gp.neg_log_likelihood()+reg_function(params)
+
         # Run optimization.
-        soln=minimize(neg_log_L,initial_guess)
+        soln=minimize(neg_log_L,initial_guess,**minimize_kw)
         update_parameters(soln['x'])
+
         if return_full_output:
             return soln
         
@@ -574,7 +598,12 @@ class GaussianProcessRegressor(object):
             return cov
 
         self.calc_cov = calc_cov
-    
+   
+    def neg_log_likelihood(self):
+        """Negative log-likelihood of the current state of the GPR.
+        """
+        return -self.log_likelihood() 
+
     def log_likelihood(self):
         """Log-likelihood of the current state of the GPR.
         """
