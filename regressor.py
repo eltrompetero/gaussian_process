@@ -115,7 +115,11 @@ class BlockGPR(object):
                                                length)
         self._define_kernel()
 
-    def update_noise(self,noise=None,noisei=None):
+    def update_noise(self,noiseCo=None,noisei=None,noise=None):
+        if noiseCo is None:
+            noiseCo=self.noiseCo
+        else:
+            self.noiseCo=noiseCo
         if noise is None:
             noise=self.noise
         else:
@@ -125,6 +129,16 @@ class BlockGPR(object):
         else:
             self.noisei=noisei
         self._update_gp()
+
+    def update_mu(self,muCo=None,mui=None):
+        if muCo is None:
+            muCo=self.muCo
+        else:
+            self.muCo=muCo
+        if mui is None:
+            mui=self.mui
+        else:
+            self.mui=mui
 
     def _define_kernel(self):
         """Define kernel function with current set of block and common kernels into
@@ -267,8 +281,9 @@ class BlockGPR(object):
                 if not self._check_block_params(paramsBlock): return False
                 
                 if params[-1]<=0: return False
-                self.update_noise(params[-1],paramsBlock[0])
-
+                self.update_noise(paramsCo[0],paramsBlock[0],params[-1])
+                
+                self.update_mu(paramsCo[1],paramsBlock[1])
                 self.update_common_kernel(*paramsCo[2:])
                 self.update_block_kernels(*paramsBlock[2:])
                 return True
@@ -281,8 +296,9 @@ class BlockGPR(object):
                 if not self._check_common_params(paramsCo): return False
 
                 if params[-1]<=0: return False
-                self.update_noise(params[-1])
-
+                self.update_noise(noiseCo=params[0],noise=params[-1])
+                
+                self.update_mu(paramsCo[1])
                 self.update_common_kernel(*paramsCo[2:])
                 return True
                 
@@ -298,8 +314,9 @@ class BlockGPR(object):
                 if not self._check_block_params(paramsBlock): return False
                 
                 if params[-1]<=0: return False
-                self.update_noise(params[-1],paramsBlock[0])
-
+                self.update_noise(noise=params[-1],noisei=paramsBlock[0])
+                
+                self.update_mu(mui=paramsBlock[1])
                 self.update_block_kernels(*paramsBlock[2:])
                 return True
         
@@ -307,6 +324,7 @@ class BlockGPR(object):
             def neg_log_L(params):
                 if not check_bounds_function(params):return 1e30
                 if not update_parameters(params): return 1e30
+                
                 self.train(X,Y)
                 L=self.gp.neg_log_likelihood()+reg_function(params)
                 print "Cost=%1.3f"%L
