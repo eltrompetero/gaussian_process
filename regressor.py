@@ -54,8 +54,9 @@ class BlockGPR(object):
         
         self._update_gp()
         
-    def _update_gp(self):
-        self.gp=GaussianProcessRegressor(self.kernel,1/self.noise)
+    def _update_gp(self,X=None):
+        self.gp=GaussianProcessRegressor(self.kernel,1/self.noise,
+             custom_noise_function=lambda x,y,i,j,noisei=self.noisei: noisei[x[0]]**2 if i==j else 0)
     
     def _setup_kernels(self):
         """First time instance is declared."""
@@ -66,21 +67,12 @@ class BlockGPR(object):
         self.commonKernel=define_matern_kernel(self.coeffCo,
                                                self.smoothnessCo,
                                                self.lengthCo)
-            
-    def update_block_kernels(self,noisei=None,
-                             mui=None,
+
+    def update_block_kernels(self,
                              lengthi=None,
                              coeffi=None,
                              smoothnessi=None):
         """Update each block kernel with new parameters."""
-        if noisei is None:
-            noisei=self.noisei
-        else:
-            self.noisei=noisei
-        if mui is None:
-            mui=self.mui
-        else:
-            self.mui=mui
         if lengthi is None:
             lengthi=self.lengthi
         else:
@@ -100,20 +92,11 @@ class BlockGPR(object):
                                                      lengthi[i])
         self._define_kernel()
             
-    def update_common_kernel(self,noise=None,
-                             mu=None,
+    def update_common_kernel(self,
                              length=None,
                              coeff=None,
                              smoothness=None):
         """Update common kernel with new parameters."""
-        if noise is None:
-            noise=self.noiseCo
-        else:
-            self.noiseCo=noise
-        if mu is None:
-            mu=self.muCo
-        else:
-            self.muCo=mu
         if length is None:
             length=self.lengthCo
         else:
@@ -132,11 +115,15 @@ class BlockGPR(object):
                                                length)
         self._define_kernel()
 
-    def update_noise(self,noise=None):
+    def update_noise(self,noise=None,noisei=None):
         if noise is None:
             noise=self.noise
         else:
             self.noise=noise
+        if noisei is None:
+            noisei=self.noisei
+        else:
+            self.noisei=noisei
         self._update_gp()
 
     def _define_kernel(self):
@@ -144,23 +131,18 @@ class BlockGPR(object):
         self.kernel. Update under-the-hood GP.
         """
         def k(x,y,
-              noise=self.noiseCo,
               dist=self.dist,
               commonKernel=self.commonKernel,
               blockKernel=self.blockKernel):
-            # Calculate the underlying kernel for all subjects.
+            # Geodesic distance. 
             d=dist(x[1:],y[1:])
-            cov=commonKernel(d)
 
-            # Add noise if the windows are the same.
-            if np.isclose(d,0,rtol=0,atol=1e-15):
-                cov+=noise**2
+            # Calculate the underlying kernel for all subjects.
+            cov=commonKernel(d)
 
             # Add individual specific covariance.
             if x[0]==y[0]:
                 cov+=blockKernel[int(x[0])](d)
-                if np.isclose(d,0,rtol=0,atol=1e-15):
-                    cov+=noise**2
             return cov
         
         self.kernel=k
@@ -285,10 +267,10 @@ class BlockGPR(object):
                 if not self._check_block_params(paramsBlock): return False
                 
                 if params[-1]<=0: return False
-                self.update_noise(params[-1])
+                self.update_noise(params[-1],paramsBlock[0])
 
-                self.update_common_kernel(*paramsCo)
-                self.update_block_kernels(*paramsBlock)
+                self.update_common_kernel(*paramsCo[2:])
+                self.update_block_kernels(*paramsBlock[2:])
                 return True
                 
         elif common:
@@ -301,7 +283,7 @@ class BlockGPR(object):
                 if params[-1]<=0: return False
                 self.update_noise(params[-1])
 
-                self.update_common_kernel(*paramsCo)
+                self.update_common_kernel(*paramsCo[2:])
                 return True
                 
         elif block:
@@ -316,9 +298,9 @@ class BlockGPR(object):
                 if not self._check_block_params(paramsBlock): return False
                 
                 if params[-1]<=0: return False
-                self.update_noise(params[-1])
+                self.update_noise(params[-1],paramsBlock[0])
 
-                self.update_block_kernels(*paramsBlock)
+                self.update_block_kernels(*paramsBlock[2:])
                 return True
         
         if verbose:
@@ -387,7 +369,9 @@ class BlockGPR(object):
 
 
 class GaussianProcessRegressor(object):
-    def __init__(self,kernel,beta,approximate_cov=None):
+    def __init__(self,kernel,beta,
+                 approximate_cov=None,
+                 custom_noise_function=lambda x,y,xi,yi:0):
         """
         For any d-dimensional input and one dimensional output. From Bishop.
 
@@ -399,11 +383,20 @@ class GaussianProcessRegressor(object):
         beta : float
             Inverse variance of noise in observations. In other words, 1/beta is added to the
             diagonal entries of the covariance matrix.
+        approximate_cov : tuple,None
+            This can trigger approximation schemes for the covariance matrix. See invert_cov()
+            method.
+        custom_noise_function : function,lambda x,y,xi,yi:0
+            Function for adding custom entries into the covariance matrix. For example, this could
+            be used to add diagonals to block matrices when we have a block matrix. Args are the two
+            data points x and y and their indices in the covariance matrix xi and yi. Whatever is
+            returned by this function is added to the corresponding entry in the covariance matrix.
         """
         assert beta>0
 
         self.kernel = kernel
         self.beta = beta
+        self.noise_function=custom_noise_function
         self._define_calc_cov()
         self.approximate_cov=approximate_cov
 
@@ -411,7 +404,7 @@ class GaussianProcessRegressor(object):
         self.invCov = None
         self.X = None
         self.Y = None
-
+    
     def fit(self,X,Y):
         """
         This only involves calculating the covariance matrix. The output Y is only taken in so that
@@ -588,11 +581,11 @@ class GaussianProcessRegressor(object):
     def _define_calc_cov(self):
         """For calculating covariance matrix. Could be sped up by jitting everything."""
         #@jit(nopython=True)
-        def calc_cov(X,kernel=self.kernel):
+        def calc_cov(X,kernel=self.kernel,noise_function=self.noise_function):
             nSamples = len(X)
             cov = np.zeros((nSamples,nSamples))
             for i,j in combinations(range(nSamples),2):
-                cov[i,j] = cov[j,i] = kernel(X[i],X[j])
+                cov[i,j] = cov[j,i] = kernel(X[i],X[j]) + noise_function(X[i],X[j],i,j)
             for i in xrange(nSamples):
                 cov[i,i] += 1/self.beta + kernel(X[i],X[i])
             return cov
@@ -645,6 +638,17 @@ class GaussianProcessRegressor(object):
             print "ERR: Some errors are negative."
         else:
             print "OK: Co errors are positive."
+
+    def _noise_matrix(self,X):
+        """
+        Calculate the entries of the noise matrix. This is primarily for testing since it's more
+        efficient to only loop through the entries of the covariance matrix once.
+        """
+        noiseMat=np.zeros((len(X),len(X)))
+        for i in xrange(len(X)-1):
+            for j in xrange(i,len(X)):
+                noiseMat[j,i]=noiseMat[i,j]=self.noise_function(X[i],X[j],i,j)
+        return noiseMat
 #end GaussianProcessRegressor
 
 
