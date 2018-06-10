@@ -259,7 +259,7 @@ class BlockGPR(object):
         if check_bounds_function is None:
             check_bounds_function=lambda x:True
 
-        # Save current state.
+        # TODO: Save current state.
 
         # Set up optimization.
         # The first 5 parameters are for the common kernel. The following parameters are for the
@@ -319,7 +319,8 @@ class BlockGPR(object):
                 self.update_mu(mui=paramsBlock[1])
                 self.update_block_kernels(*paramsBlock[2:])
                 return True
-        
+       
+
         if verbose:
             def neg_log_L(params):
                 if not check_bounds_function(params):return 1e30
@@ -559,14 +560,14 @@ class GaussianProcessRegressor(object):
 
         return self.predict(x,X=X,Y=Y,inv_cov=invCov,return_std=return_std)
 
-    def ocv_error(self):
+    def ocv_error(self,return_vector=False):
         """Calculate ordinary cross validation error on point x with measured function value y.
         https://en.wikipedia.org/wiki/Projection_matrix.
 
         Parameters
         ----------
-        x : ndarray
-        y : ndarray
+        return_vector : bool,False
+            If True, return the error for each data point before squaring and then taking the mean.
 
         Returns
         -------
@@ -576,6 +577,8 @@ class GaussianProcessRegressor(object):
         nSample=len(self.X)
         hatMatrix=self.X.dot(inv(self.X.T.dot(self.X))).dot(self.X.T)
         ypred=self.predict(self.X)
+        if return_vector:
+            return (self.Y-ypred)/(1-hatMatrix[np.diag_indices(nSample)])
         return np.mean(( (self.Y-ypred)/(1-hatMatrix[np.diag_indices(nSample)]) )**2)
 
     def gcv_error(self):
