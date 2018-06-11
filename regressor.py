@@ -235,12 +235,12 @@ class Sphere(object):
             initial_guess=np.vstack((initial_guess,
                 np.vstack((np.random.exponential(size=n_restarts-1),
                            np.random.normal(size=n_restarts-1),
-                           np.random.exponential(size=n_restarts-1,),
-                           np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10)).T,
+                           np.random.exponential(size=n_restarts-1),
+                           np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10,
                            np.random.unif(1e-2,.99,size=n_restarts-1),
                            np.random.unif(self.lon_transform_params['min_lon'],np.pi,size=n_restarts-1),
-                           np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10)).T,
-                           np.random.exponential(size=n_restarts-1)
+                           np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10,
+                           np.random.exponential(size=n_restarts-1))).T
                                     ))
             pool=mp.Pool(mp.cpu_count())
             soln=pool.map( lambda x:minimize(f,x),initial_guess )
