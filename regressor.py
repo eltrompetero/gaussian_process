@@ -237,8 +237,8 @@ class Sphere(object):
                            np.random.normal(size=n_restarts-1),
                            np.random.exponential(size=n_restarts-1),
                            np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10,
-                           np.random.unif(1e-2,.99,size=n_restarts-1),
-                           np.random.unif(self.lon_transform_params['min_lon'],np.pi,size=n_restarts-1),
+                           np.random.uniform(1e-2,.99,size=n_restarts-1),
+                           np.random.uniform(self.lon_transform_params['min_lon'],np.pi,size=n_restarts-1),
                            np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10,
                            np.random.exponential(size=n_restarts-1))).T
                                     ))
