@@ -21,8 +21,8 @@ class Sphere(object):
     """
     def __init__(self,alpha,mean,
                  kernel_params={'coeff':1,'dist_power':.5,'length_scale':100},
-                 lat_transform_params={'el':10,'gamma':1},
-                 lon_transform_params={'min_lon':0,'max_lon':pi,'min_x':.5,'max_x':2}
+                 lon_transform_params={'min_lon':0,'max_lon':pi,'min_x':.5,'max_x':2},
+                 lat_transform_params={'el':10,'gamma':1}
                  ):
         """
         Parameters
@@ -35,16 +35,17 @@ class Sphere(object):
             Matern kernel parameters including coefficient 'coeff', smoothness parameter
             'dist_power', length scale
             'length_scale'.
-        lat_transform_params : dict
-            f(x) = pi*(1-exp(-el/|x-pi|**gamma+el/pi**gamma))
-            Length scale 'el'
-            Power 'gamma'
         lon_transform_params : dict
             These are linearly transformed into given interval.
             Min longitudinal width 'min_lon' in radians
             Max longitudinal width 'max_lon'
             'min_x'
             'max_x'
+        lat_transform_params : dict
+            Map interval [0,pi] to [0,pi].
+            f(x) = pi*(1-exp(-el/|x-pi|**gamma+el/pi**gamma))
+            Length scale 'el'
+            Power 'gamma'
         """
         from geographiclib.geodesic import Geodesic
 
@@ -90,7 +91,6 @@ class Sphere(object):
 
         def kernel_function(tfx,tfy):
             """Takes in pairs (t,f) where t is duration and f is fraction."""
-            # Account for cases where f=1.
             lon0=tfx[0]*180/pi
             lon1=tfy[0]*180/pi
 
@@ -163,7 +163,7 @@ class Sphere(object):
         -------
         Y : ndarray
         """
-        Y,Yerr = self.gp.predict(X,return_std=True)
+        Y,Yerr=self.gp.predict(X,return_std=True)
         Y+=self.mean
         return Y,Yerr
 
@@ -219,9 +219,6 @@ class Sphere(object):
 
         def f(params):
             gp=train_new_gpr(params)
-            predMu,predStd=gp.predict(gp.X,return_std=True)
-            if np.isnan(predStd).any():
-                return 1e30
             try:
                 if min_ocv:
                     return gp.ocv_error()
@@ -306,6 +303,7 @@ class Sphere(object):
         
         # Refresh kernel.
         self.kernel=self.setup_kernel()
+        self.gp=GaussianProcessRegressor(self.kernel,1/self.alpha)
         self.train(X,Y)
 
         return soln
@@ -881,8 +879,9 @@ class GaussianProcessRegressor(object):
         return self.predict(x,X=X,Y=Y,inv_cov=invCov,return_std=return_std)
 
     def ocv_error(self,return_vector=False):
-        """Calculate ordinary cross validation error on point x with measured function value y.
-        https://en.wikipedia.org/wiki/Projection_matrix.
+        """Calculate ordinary cross validation error on point x with measured function value y. I'm
+        not sure if this is right but I'm not sure what the correct expression is for this nonlinear
+        model.
 
         Parameters
         ----------
@@ -895,12 +894,19 @@ class GaussianProcessRegressor(object):
         """
         inv=np.linalg.inv
         nSample=len(self.X)
-
-        hatMatrix=self.X.dot(inv(self.X.T.dot(self.X))).dot(self.X.T)
-        ypred=self.predict(self.X)
+        
+        ypred=np.zeros(nSample)
+        for i in xrange(nSample):
+            exceptiIx=range(nSample)
+            exceptiIx.pop(i)
+            # Predict x_i after having removed y_i from the data.
+            k=np.zeros(nSample-1)
+            for j,ix in enumerate(exceptiIx):
+                k[j]=self.kernel(self.X[ix],self.X[i])
+            ypred[i]=k[None,:].dot(inv(self.cov[exceptiIx,:][:,exceptiIx])).dot(self.Y[exceptiIx])
         if return_vector:
-            return (self.Y-ypred)/(1-hatMatrix[np.diag_indices(nSample)])
-        return np.mean(( (self.Y-ypred)/(1-hatMatrix[np.diag_indices(nSample)]) )**2)
+            return ypred-self.Y
+        return ((ypred-self.Y)**2).sum()
 
     def gcv_error(self):
         """Calculate generalized cross validation error on point x with measured function value y.
@@ -945,7 +951,7 @@ class GaussianProcessRegressor(object):
         det=np.linalg.slogdet(self.cov)
         assert det[0]>0,(det,self.cov.min())
         return ( -.5*det[1]
-                 -.5*self.Y.dot(np.linalg.inv(self.cov)).dot(self.Y)
+                 -.5*self.Y.dot(self.invCov).dot(self.Y)
                  -len(self.X)/2*np.log(2*np.pi) )
 
     def sample(self,cov=None,size=()):
