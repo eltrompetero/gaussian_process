@@ -10,7 +10,7 @@ from numba import jit
 from scipy.spatial.distance import pdist,squareform
 from itertools import combinations
 from scipy.optimize import minimize,minimize_scalar
-
+import multiprocess as mp
 
 
 class Sphere(object):
@@ -192,6 +192,7 @@ class Sphere(object):
         Y : ndarray
         n_restarts : int,1
         initial_guess : list,None
+        min_ocv : bool,False
 
         Returns
         -------
@@ -233,37 +234,49 @@ class Sphere(object):
         # Parameters are noise std, mean perf, equatorial radius, oblateness.
         if n_restarts>1:
             initial_guess=np.vstack((initial_guess,
-                np.vstack((np.random.exponential(size=n_restarts-1),
-                           np.random.normal(size=n_restarts-1),
-                           np.random.exponential(size=n_restarts-1),
-                           np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10,
-                           np.random.uniform(1e-2,.99,size=n_restarts-1),
-                           np.random.uniform(self.lon_transform_params['min_lon'],np.pi,size=n_restarts-1),
-                           np.random.exponential(size=n_restarts-1,scale=self.DEFAULT_LENGTH_SCALE)+10,
-                           np.random.exponential(size=n_restarts-1))).T
-                                    ))
+                                     np.vstack([self._random_parameter_guess() for i in xrange(n_restarts-1)])
+                                     ))
             pool=mp.Pool(mp.cpu_count())
-            soln=pool.map( lambda x:minimize(f,x),initial_guess )
+            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds()),initial_guess )
             pool.close()
         else:
-            soln=[minimize(f,initial_guess,bounds=[(1e-5,np.inf),
-                                                   (-np.inf,np.inf),
-                                                   (0,np.inf),
-                                                   (0,np.inf),
-                                                   (0+1e-5,1-1e-5),
-                                                   (self.lon_transform_params['min_lon'],np.pi),
-                                                   (0,np.inf),
-                                                   (0,30)])]
+            soln=[minimize(f,initial_guess,bounds=self._bounds())]
 
         if len(soln)>1:
             minNegLikIx=np.argmin([s['fun'] for s in soln])
             soln=[soln[minNegLikIx]]
         return soln[0]
+    
+    def _random_parameter_guess(self):
+        """Generate a random guess for the parameters
+
+        Returns
+        -------
+        guess : list
+        """
+        return [np.random.exponential(),
+                np.random.normal(),
+                np.random.exponential(),
+                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE)+10,
+                np.random.uniform(1e-2,.99),
+                np.random.uniform(self.lon_transform_params['min_lon'],pi),
+                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE),
+                np.random.exponential()]
+
+    def _bounds(self):
+        return [(1e-5,np.inf),
+                (-np.inf,np.inf),
+                (0,np.inf),
+                (0,np.inf),
+                (0+1e-5,1-1e-5),
+                (self.lon_transform_params['min_lon'],pi),
+                (0,np.inf),
+                (0,30)]
 
     def optimize_hyperparams(self,X,Y,
                              initial_guess=None,
                              n_restarts=4,
-                             use_ocv=False):
+                             min_ocv=False):
         """Find the hyperparameters that optimize the log likelihood and reset the kernel and the
         GPR landscape.
 
@@ -277,7 +290,7 @@ class Sphere(object):
         verbose : bool,False
         initial_guess : ndarray,None
         n_restarts : int,4
-        use_ocv : bool,False
+        min_ocv : bool,False
             If True, minimize the OCV error instead of maximizing log likelihood.
 
         Returns
@@ -288,7 +301,7 @@ class Sphere(object):
         soln=self._search_hyperparams(X,Y,
                                       n_restarts=n_restarts,
                                       initial_guess=initial_guess,
-                                      min_ocv=use_ocv)
+                                      min_ocv=min_ocv)
         self.set_params_from_vector(soln['x'])
         
         # Refresh kernel.
@@ -882,6 +895,7 @@ class GaussianProcessRegressor(object):
         """
         inv=np.linalg.inv
         nSample=len(self.X)
+
         hatMatrix=self.X.dot(inv(self.X.T.dot(self.X))).dot(self.X.T)
         ypred=self.predict(self.X)
         if return_vector:
