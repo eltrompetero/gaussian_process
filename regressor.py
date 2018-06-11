@@ -168,7 +168,7 @@ class Sphere(object):
         return Y,Yerr
 
     def _search_hyperparams(self,X,Y,
-                            n_restarts=1,
+                            n_restarts=0,
                             initial_guess=None,
                             min_ocv=False):
         """Find the hyperparameters that maximize the log likelihood of the data including length
@@ -193,7 +193,7 @@ class Sphere(object):
         n_restarts : int,1
         initial_guess : list,None
         min_ocv : bool,False
-
+        
         Returns
         -------
         soln : dict
@@ -229,7 +229,7 @@ class Sphere(object):
                 return 1e30
         
         # Parameters are noise std, mean perf, equatorial radius, oblateness.
-        if n_restarts>1:
+        if n_restarts>0:
             initial_guess=np.vstack((initial_guess,
                                      np.vstack([self._random_parameter_guess() for i in xrange(n_restarts-1)])
                                      ))
@@ -239,13 +239,10 @@ class Sphere(object):
         else:
             soln=[minimize(f,initial_guess,bounds=self._bounds())]
 
-        if len(soln)>1:
-            minNegLikIx=np.argmin([s['fun'] for s in soln])
-            soln=[soln[minNegLikIx]]
-        return soln[0]
+        return soln 
     
     def _random_parameter_guess(self):
-        """Generate a random guess for the parameters
+        """Generate a random guess for the parameters that satisfy bounds.
 
         Returns
         -------
@@ -266,14 +263,15 @@ class Sphere(object):
                 (0,np.inf),
                 (0,np.inf),
                 (0+1e-5,1-1e-5),
-                (self.lon_transform_params['min_lon'],pi),
+                (self.lon_transform_params['min_lon']+1e-3,pi-1e-3),
                 (0,np.inf),
                 (0,30)]
 
     def optimize_hyperparams(self,X,Y,
                              initial_guess=None,
-                             n_restarts=4,
-                             min_ocv=False):
+                             n_restarts=3,
+                             min_ocv=False,
+                             return_best_soln=True):
         """Find the hyperparameters that optimize the log likelihood and reset the kernel and the
         GPR landscape.
 
@@ -289,6 +287,8 @@ class Sphere(object):
         n_restarts : int,4
         min_ocv : bool,False
             If True, minimize the OCV error instead of maximizing log likelihood.
+        return_best_soln : bool,True
+            If True, only return optimal solution.
 
         Returns
         -------
@@ -299,7 +299,12 @@ class Sphere(object):
                                       n_restarts=n_restarts,
                                       initial_guess=initial_guess,
                                       min_ocv=min_ocv)
-        self.set_params_from_vector(soln['x'])
+        minNegLikIx=np.argmin([s['fun'] for s in soln])
+        if return_best_soln:
+            soln=[soln[minNegLikIx]]
+            self.set_params_from_vector(soln[0]['x'])
+        else:
+            self.set_params_from_vector(soln[minNegLikIx]['x'])
         
         # Refresh kernel.
         self.kernel=self.setup_kernel()
