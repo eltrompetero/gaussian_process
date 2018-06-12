@@ -102,7 +102,7 @@ class Sphere(object):
 
             lat0=tfx[1]*180/pi-90
             lat1=tfy[1]*180/pi-90
-            return coeff*np.exp( -_geodesic.Inverse(lat0,lon0,lat1,lon1)['s12']**dist_power/length_scale )
+            return coeff*np.exp( -(_geodesic.Inverse(lat0,lon0,lat1,lon1)['s12']/length_scale)**dist_power )
         return kernel_function
 
     def map_to_sphere(self,X,min_x=None,max_x=None,min_lon=None,max_lon=None,el=None,gamma=None):
@@ -229,7 +229,8 @@ class Sphere(object):
     def _search_hyperparams(self,X,Y,
                             n_restarts=0,
                             initial_guess=None,
-                            min_ocv=False):
+                            min_ocv=False,
+                            minimize_kw={}):
         """Find the hyperparameters that maximize the log likelihood of the data including length
         scale parameters on the surface of ellipsoid.
         
@@ -293,10 +294,10 @@ class Sphere(object):
                                      np.vstack([self._random_parameter_guess() for i in xrange(n_restarts-1)])
                                      ))
             pool=mp.Pool(mp.cpu_count())
-            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds()),initial_guess )
+            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds(),**minimize_kw),initial_guess )
             pool.close()
         else:
-            soln=[minimize(f,initial_guess,bounds=self._bounds())]
+            soln=[minimize(f,initial_guess,bounds=self._bounds(),**minimize_kw)]
 
         return soln 
 
@@ -310,14 +311,14 @@ class Sphere(object):
         self.lat_transform_params['gamma']=param_vector[7]
 
     def print_parameters(self):
-        print "Noise parameter alpha = %1.2f"%self.alpha
-        print "Mean performance mu = %1.2f"%self.mean
-        print "Kernel coeff = %1.2f"%self.kernel_params['coeff']
-        print "Kernel length scale = %1.2f"%self.kernel_params['length_scale']
-        print "Kernel power = %1.2f"%self.kernel_params['dist_power']
-        print "Kernel max lon = %1.2f"%self.lon_transform_params['max_lon']
-        print "Kernel lat el = %1.2f"%self.lat_transform_params['el']
-        print "Kernel gamma el = %1.2f"%self.lat_transform_params['gamma']
+        print "Noise parameter alpha = %1.5f"%self.alpha
+        print "Mean performance mu = %1.5f"%self.mean
+        print "Kernel coeff = %1.5f"%self.kernel_params['coeff']
+        print "Kernel length scale = %1.5f"%self.kernel_params['length_scale']
+        print "Kernel power = %1.5f"%self.kernel_params['dist_power']
+        print "Kernel max lon = %1.5f"%self.lon_transform_params['max_lon']
+        print "Kernel lat el = %1.5f"%self.lat_transform_params['el']
+        print "Kernel gamma el = %1.5f"%self.lat_transform_params['gamma']
 
     def _random_parameter_guess(self):
         """Generate a random guess for the parameters that satisfy bounds.
@@ -346,14 +347,36 @@ class Sphere(object):
                 (.1,.1)]
 
     def _bounds(self):
+        """Max longitude parameter seems redundant from numerical results of max likelihood."""
         return [(1e-6,np.inf),
                 (-np.inf,np.inf),
                 (1e-6,np.inf),
                 (1e-6,np.inf),
                 (1e-6,1-1e-6),
-                (self.lon_transform_params['min_lon']+1e-3,pi-1e-3),
+                (pi,pi),  # seems redundant
                 (1e-6,np.inf),
                 (1e-6,30)]
+    
+    def _train_new_gpr(self,params):
+        """Function used during hyperparameter optimization. Here for debugging purposes. Make sure
+        to define self._X and self._Y."""
+        kernel=self.setup_kernel(params[2],params[3],params[4],
+                                 map_to_sphere_kw={'max_lon':params[5],'el':params[6],'gamma':params[7]})
+        gp=GaussianProcessRegressor(kernel,1/params[0])
+        gp.fit( self._X,self._Y-params[1] )
+        return gp
+
+    def _neg_log_likelihood(self,params,min_ocv=False):
+        """Function to be used during hyperparameter optimization."""
+        gp=self._train_new_gpr(params)
+        try:
+            if min_ocv:
+                return gp.ocv_error()
+            return gp.neg_log_likelihood()
+        except AssertionError:
+            # This is printed when the determinant of the covariance matrix is not positive.
+            print "Bad parameter values %f, %f, %f, %f"%tuple(params)
+            return 1e30
 #end Sphere
 
 
