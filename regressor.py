@@ -293,7 +293,7 @@ class Sphere(object):
                                      np.vstack([self._random_parameter_guess() for i in xrange(n_restarts-1)])
                                      ))
             pool=mp.Pool(mp.cpu_count())
-            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds_fixed_sphere()),initial_guess )
+            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds()),initial_guess )
             pool.close()
         else:
             soln=[minimize(f,initial_guess,bounds=self._bounds())]
