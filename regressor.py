@@ -342,8 +342,8 @@ class Sphere(object):
                 (1e-6,np.inf),
                 (1e-6,1-1e-6),
                 (pi,pi),
-                (1e-6,np.inf),
-                (1e-6,30)]
+                (10,10),
+                (.1,.1)]
 
     def _bounds(self):
         return [(1e-6,np.inf),
