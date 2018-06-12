@@ -22,7 +22,8 @@ class Sphere(object):
     def __init__(self,alpha,mean,
                  kernel_params={'coeff':1,'dist_power':.5,'length_scale':100},
                  lon_transform_params={'min_lon':0,'max_lon':pi,'min_x':.5,'max_x':2},
-                 lat_transform_params={'el':10,'gamma':1}
+                 lat_transform_params={'el':10,'gamma':1},
+                 fix_mapping=False, 
                  ):
         """
         Parameters
@@ -46,6 +47,8 @@ class Sphere(object):
             f(x) = pi*(1-exp(-el/|x-pi|**gamma+el/pi**gamma))
             Length scale 'el'
             Power 'gamma'
+        fix_mapping : bool,True
+            If True, the mapping parameters are fixed such that the entire sphere is spanned.
         """
         from geographiclib.geodesic import Geodesic
 
@@ -65,6 +68,9 @@ class Sphere(object):
         
         self.kernel=self.setup_kernel()
         self.gp=GaussianProcessRegressor(self.kernel,alpha**-1)
+
+        if fix_mapping:
+            self._bounds=self._bounds_fixed_sphere
 
     @staticmethod
     def exp_transform(x,el,gamma):
@@ -174,6 +180,52 @@ class Sphere(object):
         Y+=self.mean
         return Y,Yerr
 
+    def optimize_hyperparams(self,X,Y,
+                             initial_guess=None,
+                             n_restarts=3,
+                             min_ocv=False,
+                             return_best_soln=True):
+        """Find the hyperparameters that optimize the log likelihood and reset the kernel and the
+        GPR landscape.
+
+        Parameters that are being optimized include the kernel parameters, the mapping to sphere
+        parameters, the mean, and the noise.
+
+        Parameters
+        ----------
+        X : ndarray
+        Y : ndarray
+        verbose : bool,False
+        initial_guess : ndarray,None
+        n_restarts : int,4
+        min_ocv : bool,False
+            If True, minimize the OCV error instead of maximizing log likelihood.
+        return_best_soln : bool,True
+            If True, only return optimal solution.
+
+        Returns
+        -------
+        logLikelihood : float
+            Log likelihood of the data given the found parameters.
+        """
+        soln=self._search_hyperparams(X,Y,
+                                      n_restarts=n_restarts,
+                                      initial_guess=initial_guess,
+                                      min_ocv=min_ocv)
+        minNegLikIx=np.argmin([s['fun'] for s in soln])
+        if return_best_soln:
+            soln=[soln[minNegLikIx]]
+            self.set_params_from_vector(soln[0]['x'])
+        else:
+            self.set_params_from_vector(soln[minNegLikIx]['x'])
+        
+        # Refresh kernel.
+        self.kernel=self.setup_kernel()
+        self.gp=GaussianProcessRegressor(self.kernel,1/self.alpha)
+        self.train(X,Y)
+
+        return soln
+
     def _search_hyperparams(self,X,Y,
                             n_restarts=0,
                             initial_guess=None,
@@ -241,84 +293,12 @@ class Sphere(object):
                                      np.vstack([self._random_parameter_guess() for i in xrange(n_restarts-1)])
                                      ))
             pool=mp.Pool(mp.cpu_count())
-            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds()),initial_guess )
+            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds_fixed_sphere()),initial_guess )
             pool.close()
         else:
             soln=[minimize(f,initial_guess,bounds=self._bounds())]
 
         return soln 
-    
-    def _random_parameter_guess(self):
-        """Generate a random guess for the parameters that satisfy bounds.
-
-        Returns
-        -------
-        guess : list
-        """
-        return [np.random.exponential(),
-                np.random.normal(),
-                np.random.exponential(),
-                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE)+10,
-                np.random.uniform(1e-2,.99),
-                np.random.uniform(self.lon_transform_params['min_lon'],pi),
-                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE),
-                np.random.exponential()]
-
-    def _bounds(self):
-        return [(1e-6,np.inf),
-                (-np.inf,np.inf),
-                (1e-6,np.inf),
-                (1e-6,np.inf),
-                (1e-6,1-1e-6),
-                (self.lon_transform_params['min_lon']+1e-3,pi-1e-3),
-                (1e-6,np.inf),
-                (1e-6,30)]
-
-    def optimize_hyperparams(self,X,Y,
-                             initial_guess=None,
-                             n_restarts=3,
-                             min_ocv=False,
-                             return_best_soln=True):
-        """Find the hyperparameters that optimize the log likelihood and reset the kernel and the
-        GPR landscape.
-
-        Parameters that are being optimized include the kernel parameters, the mapping to sphere
-        parameters, the mean, and the noise.
-
-        Parameters
-        ----------
-        X : ndarray
-        Y : ndarray
-        verbose : bool,False
-        initial_guess : ndarray,None
-        n_restarts : int,4
-        min_ocv : bool,False
-            If True, minimize the OCV error instead of maximizing log likelihood.
-        return_best_soln : bool,True
-            If True, only return optimal solution.
-
-        Returns
-        -------
-        logLikelihood : float
-            Log likelihood of the data given the found parameters.
-        """
-        soln=self._search_hyperparams(X,Y,
-                                      n_restarts=n_restarts,
-                                      initial_guess=initial_guess,
-                                      min_ocv=min_ocv)
-        minNegLikIx=np.argmin([s['fun'] for s in soln])
-        if return_best_soln:
-            soln=[soln[minNegLikIx]]
-            self.set_params_from_vector(soln[0]['x'])
-        else:
-            self.set_params_from_vector(soln[minNegLikIx]['x'])
-        
-        # Refresh kernel.
-        self.kernel=self.setup_kernel()
-        self.gp=GaussianProcessRegressor(self.kernel,1/self.alpha)
-        self.train(X,Y)
-
-        return soln
 
     def set_params_from_vector(self,param_vector):
         self.alpha,self.mean=param_vector[:2]
@@ -338,6 +318,42 @@ class Sphere(object):
         print "Kernel max lon = %1.2f"%self.lon_transform_params['max_lon']
         print "Kernel lat el = %1.2f"%self.lat_transform_params['el']
         print "Kernel gamma el = %1.2f"%self.lat_transform_params['gamma']
+
+    def _random_parameter_guess(self):
+        """Generate a random guess for the parameters that satisfy bounds.
+
+        Returns
+        -------
+        guess : list
+        """
+        return [np.random.exponential(),
+                np.random.normal(),
+                np.random.exponential(),
+                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE)+10,
+                np.random.uniform(1e-2,.99),
+                np.random.uniform(self.lon_transform_params['min_lon'],pi),
+                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE),
+                np.random.exponential()]
+
+    def _bounds_fixed_sphere(self):
+        return [(1e-6,np.inf),
+                (-np.inf,np.inf),
+                (1e-6,np.inf),
+                (1e-6,np.inf),
+                (1e-6,1-1e-6),
+                (pi,pi),
+                (1e-6,np.inf),
+                (1e-6,30)]
+
+    def _bounds(self):
+        return [(1e-6,np.inf),
+                (-np.inf,np.inf),
+                (1e-6,np.inf),
+                (1e-6,np.inf),
+                (1e-6,1-1e-6),
+                (self.lon_transform_params['min_lon']+1e-3,pi-1e-3),
+                (1e-6,np.inf),
+                (1e-6,30)]
 #end Sphere
 
 
