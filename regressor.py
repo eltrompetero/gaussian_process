@@ -47,7 +47,7 @@ class Sphere(object):
             f(x) = pi*(1-exp(-el/|x-pi|**gamma+el/pi**gamma))
             Length scale 'el'
             Power 'gamma'
-        fix_mapping : bool,True
+        fix_mapping : bool,False
             If True, the mapping parameters are fixed such that the entire sphere is spanned.
         """
         from geographiclib.geodesic import Geodesic
@@ -92,6 +92,7 @@ class Sphere(object):
         """Map radian coordinates into degress and calculate kernel. All the transformations from
         Euclidean to spherical space should already have been done.
         """
+        assert coeff>0
         assert length_scale>0,length_scale
         assert 0<=dist_power<=1,dist_power
 
@@ -124,7 +125,8 @@ class Sphere(object):
                      map_to_sphere_args=[],
                      map_to_sphere_kw={}):
         """Define self.kernel that can be used to compute kernel on single pairs of data points.
-        This is what will be passed into the GaussianProcessRegressor.
+        This is what will be passed into the GaussianProcessRegressor. It uses map_to_sphere() to
+        transform coordinates onto the spherical surface.
 
         Parameters
         ----------
@@ -215,9 +217,11 @@ class Sphere(object):
         minNegLikIx=np.argmin([s['fun'] for s in soln])
         if return_best_soln:
             soln=[soln[minNegLikIx]]
-            self.set_params_from_vector(soln[0]['x'])
+            paramVec=soln[0]['x'].copy()
         else:
-            self.set_params_from_vector(soln[minNegLikIx]['x'])
+            paramVec=soln[minNegLikIx]['x'].copy()
+        paramVec[0]=np.exp(paramVec[0])
+        self.set_params_from_vector(paramVec)
         
         # Refresh kernel.
         self.kernel=self.setup_kernel()
@@ -253,6 +257,7 @@ class Sphere(object):
         n_restarts : int,1
         initial_guess : list,None
         min_ocv : bool,False
+        minimize_kw : dict,{}
         
         Returns
         -------
@@ -261,7 +266,7 @@ class Sphere(object):
         """
         from scipy.optimize import minimize
         if initial_guess is None:
-            initial_guess=np.array([self.alpha,
+            initial_guess=np.array([np.log(self.alpha),
                                     self.mean,
                                     self.kernel_params['coeff'],
                                     self.kernel_params['length_scale'],
@@ -278,11 +283,14 @@ class Sphere(object):
             return gp
 
         def f(params):
+            params=params.copy()
+            params[0]=np.exp(params[0])
+
             gp=train_new_gpr(params)
             try:
                 if min_ocv:
                     return gp.ocv_error()
-                return -gp.log_likelihood()
+                return gp.neg_log_likelihood()
             except AssertionError:
                 # This is printed when the determinant of the covariance matrix is not positive.
                 print "Bad parameter values %f, %f, %f, %f"%tuple(params)
@@ -291,10 +299,10 @@ class Sphere(object):
         # Parameters are noise std, mean perf, equatorial radius, oblateness.
         if n_restarts>0:
             initial_guess=np.vstack((initial_guess,
-                                     np.vstack([self._random_parameter_guess() for i in xrange(n_restarts-1)])
+                                     np.vstack([self._random_parameter_guess() for i in xrange(n_restarts)])
                                      ))
             pool=mp.Pool(mp.cpu_count())
-            soln=pool.map( lambda x:minimize(f,x,bounds=self._bounds(),**minimize_kw),initial_guess )
+            soln=pool.map( lambda x:minimize( f,x,bounds=self._bounds(),**minimize_kw),initial_guess )
             pool.close()
         else:
             soln=[minimize(f,initial_guess,bounds=self._bounds(),**minimize_kw)]
@@ -327,7 +335,7 @@ class Sphere(object):
         -------
         guess : list
         """
-        return [np.random.exponential(),
+        return [np.log(np.random.exponential()+1e-6),
                 np.random.normal(),
                 np.random.exponential(),
                 np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE)+10,
@@ -337,7 +345,7 @@ class Sphere(object):
                 np.random.exponential()]
 
     def _bounds_fixed_sphere(self):
-        return [(1e-6,np.inf),
+        return [(np.log(1e-6),np.inf),
                 (-np.inf,np.inf),
                 (1e-6,np.inf),
                 (1e-6,np.inf),
@@ -348,12 +356,12 @@ class Sphere(object):
 
     def _bounds(self):
         """Max longitude parameter seems redundant from numerical results of max likelihood."""
-        return [(1e-6,np.inf),
+        return [(np.log(1e-6),5),
                 (-np.inf,np.inf),
                 (1e-6,np.inf),
                 (1e-6,np.inf),
                 (1e-6,1-1e-6),
-                (pi,pi),  # seems redundant
+                (pi,pi),  # fixed because it seems redundant
                 (1e-6,np.inf),
                 (1e-6,30)]
     
@@ -368,6 +376,9 @@ class Sphere(object):
 
     def _neg_log_likelihood(self,params,min_ocv=False):
         """Function to be used during hyperparameter optimization."""
+        params=params.copy()
+        params[0]=np.exp(params[0])
+
         gp=self._train_new_gpr(params)
         try:
             if min_ocv:
