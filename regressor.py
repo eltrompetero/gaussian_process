@@ -143,18 +143,24 @@ class Sphere(object):
 
     def train(self,X,Y):
         """
-        Fits the GPR to all data points and saves the predicted values with errors. 
-        If you want to just query the model, you should access self.gp directly.
+        Fits the GPR to all data points having accounted for the mean.
 
         Parameters
         ----------
         X : ndarray,None
         Y : ndarray,None
+
+        Returns
+        -------
+        Y : ndarray
+        Yerr : ndarray
         """
         self.gp.fit( X,Y-self.mean )
 
     def predict(self,X):
         """
+        Predictionat given points points having accounted for the mean.
+
         Parameters
         ----------
         X : ndarray
@@ -162,6 +168,7 @@ class Sphere(object):
         Returns
         -------
         Y : ndarray
+        Yerr : ndarray
         """
         Y,Yerr=self.gp.predict(X,return_std=True)
         Y+=self.mean
@@ -258,14 +265,14 @@ class Sphere(object):
                 np.random.exponential()]
 
     def _bounds(self):
-        return [(1e-5,np.inf),
+        return [(1e-6,np.inf),
                 (-np.inf,np.inf),
-                (0,np.inf),
-                (0,np.inf),
-                (0+1e-5,1-1e-5),
+                (1e-6,np.inf),
+                (1e-6,np.inf),
+                (1e-6,1-1e-6),
                 (self.lon_transform_params['min_lon']+1e-3,pi-1e-3),
-                (0,np.inf),
-                (0,30)]
+                (1e-6,np.inf),
+                (1e-6,30)]
 
     def optimize_hyperparams(self,X,Y,
                              initial_guess=None,
