@@ -186,7 +186,8 @@ class Sphere(object):
                              initial_guess=None,
                              n_restarts=3,
                              min_ocv=False,
-                             return_best_soln=True):
+                             return_best_soln=True,
+                             prior_function=lambda x:0):
         """Find the hyperparameters that optimize the log likelihood and reset the kernel and the
         GPR landscape.
 
@@ -211,6 +212,7 @@ class Sphere(object):
             Log likelihood of the data given the found parameters.
         """
         soln=self._search_hyperparams(X,Y,
+                                      prior_function,
                                       n_restarts=n_restarts,
                                       initial_guess=initial_guess,
                                       min_ocv=min_ocv)
@@ -230,7 +232,7 @@ class Sphere(object):
 
         return soln
 
-    def _search_hyperparams(self,X,Y,
+    def _search_hyperparams(self,X,Y,prior_function,
                             n_restarts=0,
                             initial_guess=None,
                             min_ocv=False,
@@ -289,8 +291,8 @@ class Sphere(object):
             gp=train_new_gpr(params)
             try:
                 if min_ocv:
-                    return gp.ocv_error()
-                return gp.neg_log_likelihood()
+                    return gp.ocv_error() + prior_function(params)
+                return gp.neg_log_likelihood() + prior_function(params)
             except AssertionError:
                 # This is printed when the determinant of the covariance matrix is not positive.
                 print "Bad parameter values %f, %f, %f, %f"%tuple(params)
