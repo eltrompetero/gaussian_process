@@ -22,7 +22,7 @@ class Sphere(object):
     def __init__(self,alpha,mean,
                  kernel_params={'coeff':1,'dist_power':.5,'length_scale':100},
                  lon_transform_params={'min_lon':0,'max_lon':pi,'min_x':.5,'max_x':2},
-                 lat_transform_params={'el':10,'gamma':1},
+                 lat_transform_params={'eps':1,'el':10,'gamma':1},
                  fix_mapping=False, 
                  ):
         """
@@ -45,6 +45,9 @@ class Sphere(object):
         lat_transform_params : dict
             Map interval [0,pi] to [0,pi].
             f(x) = pi*(1-exp(-el/|x-pi|**gamma+el/pi**gamma))
+            Coefficient 'eps' determines how strong this is correcting the simple linear
+                transformation. When eps=0, a simple linear transformation is taken. When eps=1,
+                only the exponential transformation is made.
             Length scale 'el'
             Power 'gamma'
         fix_mapping : bool,False
@@ -106,18 +109,20 @@ class Sphere(object):
             return coeff*np.exp( -(_geodesic.Inverse(lat0,lon0,lat1,lon1)['s12']/length_scale)**dist_power )
         return kernel_function
 
-    def map_to_sphere(self,X,min_x=None,max_x=None,min_lon=None,max_lon=None,el=None,gamma=None):
+    def map_to_sphere(self,X,min_x=None,max_x=None,min_lon=None,max_lon=None,
+                      eps=None,el=None,gamma=None):
         min_x=min_x or self.lon_transform_params['min_x']
         max_x=max_x or self.lon_transform_params['max_x']
         min_lon=min_lon or self.lon_transform_params['min_lon']
         max_lon=max_lon or self.lon_transform_params['max_lon']
 
         transformed_lon=(X[0]-min_x)/(max_x-min_x)*(max_lon-min_lon)+min_lon
-
+        
+        eps=eps or self.lat_transform_params['eps']
         el=el or self.lat_transform_params['el']
         gamma=gamma or self.lat_transform_params['gamma']
 
-        transformed_lat=self.exp_transform(X[1],el,gamma)
+        transformed_lat=(1-eps)*X[1]+eps*self.exp_transform(X[1],el,gamma)
 
         return transformed_lon,transformed_lat
 
@@ -167,7 +172,7 @@ class Sphere(object):
 
     def predict(self,X):
         """
-        Predictionat given points points having accounted for the mean.
+        Prediction at given points points having accounted for the mean.
 
         Parameters
         ----------
@@ -205,6 +210,7 @@ class Sphere(object):
             If True, minimize the OCV error instead of maximizing log likelihood.
         return_best_soln : bool,True
             If True, only return optimal solution.
+        prior_function : function
 
         Returns
         -------
@@ -274,12 +280,13 @@ class Sphere(object):
                                     self.kernel_params['length_scale'],
                                     self.kernel_params['dist_power'],
                                     self.lon_transform_params['max_lon'],
+                                    self.lat_transform_params['eps'],
                                     self.lat_transform_params['el'],
                                     self.lat_transform_params['gamma']])
 
         def train_new_gpr(params):
             kernel=self.setup_kernel(params[2],params[3],params[4],
-                                     map_to_sphere_kw={'max_lon':params[5],'el':params[6],'gamma':params[7]})
+                    map_to_sphere_kw={'max_lon':params[5],'eps':params[6],'el':params[7],'gamma':params[8]})
             gp=GaussianProcessRegressor(kernel,1/params[0])
             gp.fit( X,Y-params[1] )
             return gp
@@ -317,8 +324,9 @@ class Sphere(object):
                             'length_scale':param_vector[3],
                             'dist_power':param_vector[4]}
         self.lon_transform_params['max_lon']=param_vector[5]
-        self.lat_transform_params['el']=param_vector[6]
-        self.lat_transform_params['gamma']=param_vector[7]
+        self.lat_transform_params['eps']=param_vector[6]
+        self.lat_transform_params['el']=param_vector[7]
+        self.lat_transform_params['gamma']=param_vector[8]
 
     def print_parameters(self):
         print "Noise parameter alpha = %1.5f"%self.alpha
@@ -327,6 +335,7 @@ class Sphere(object):
         print "Kernel length scale = %1.5f"%self.kernel_params['length_scale']
         print "Kernel power = %1.5f"%self.kernel_params['dist_power']
         print "Kernel max lon = %1.5f"%self.lon_transform_params['max_lon']
+        print "Kernel lat eps = %1.5f"%self.lat_transform_params['eps']
         print "Kernel lat el = %1.5f"%self.lat_transform_params['el']
         print "Kernel gamma el = %1.5f"%self.lat_transform_params['gamma']
 
@@ -343,35 +352,38 @@ class Sphere(object):
                 np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE)+10,
                 np.random.uniform(1e-2,.99),
                 np.random.uniform(self.lon_transform_params['min_lon'],pi),
-                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE),
-                np.random.exponential()]
+                np.random.rand(),
+                np.random.exponential(scale=self.DEFAULT_LENGTH_SCALE)+1e-6,
+                np.random.exponential()+1e-6]
 
     def _bounds_fixed_sphere(self):
-        return [(np.log(1e-6),np.inf),
-                (-np.inf,np.inf),
-                (1e-6,np.inf),
-                (1e-6,np.inf),
+        return [(np.log(1e-6),None),
+                (None,None),
+                (1e-6,None),
+                (1e-6,None),
                 (1e-6,1-1e-6),
                 (pi,pi),
+                (0,0),
                 (10,10),
                 (.1,.1)]
 
     def _bounds(self):
         """Max longitude parameter seems redundant from numerical results of max likelihood."""
         return [(np.log(1e-6),5),
-                (-np.inf,np.inf),
-                (1e-6,np.inf),
-                (1e-6,np.inf),
+                (None,None),
+                (1e-6,None),
+                (1e-6,None),
                 (1e-6,1-1e-6),
                 (pi,pi),  # fixed because it seems redundant
-                (1e-6,np.inf),
+                (0,0),  # just a linear mapping to latitude
+                (1e-6,None),
                 (1e-6,30)]
     
     def _train_new_gpr(self,params):
         """Function used during hyperparameter optimization. Here for debugging purposes. Make sure
         to define self._X and self._Y."""
         kernel=self.setup_kernel(params[2],params[3],params[4],
-                                 map_to_sphere_kw={'max_lon':params[5],'el':params[6],'gamma':params[7]})
+                map_to_sphere_kw={'max_lon':params[5],'eps':params[6],'el':params[7],'gamma':params[8]})
         gp=GaussianProcessRegressor(kernel,1/params[0])
         gp.fit( self._X,self._Y-params[1] )
         return gp
@@ -430,7 +442,7 @@ class BlockGPR(object):
         # Noise term per data entry. This is independent noise per experimental run even if on the
         # same block with the same parameters.
         self.noise=.2
-        
+
         self._setup_kernels()
         self._define_kernel()
         
@@ -438,7 +450,8 @@ class BlockGPR(object):
         
     def _update_gp(self,X=None):
         self.gp=GaussianProcessRegressor(self.kernel,1/self.noise,
-             custom_noise_function=lambda x,y,i,j,noisei=self.noisei: noisei[x[0]]**2 if i==j else 0)
+             custom_noise_function=lambda x,y,i,j,noisei=self.noisei: noisei[x[0]]**2 if i==j else 0,
+             parallelize=False)
     
     def _setup_kernels(self):
         """First time instance is declared."""
@@ -556,15 +569,21 @@ class BlockGPR(object):
         
         self.gp.fit(X,Y)
 
-    def predict(self,X):
+    def predict(self,X,return_std=False):
         assert X.ndim==2
-        Y=self.gp.predict(X)
+        if return_std:
+            Y,Yerr=self.gp.predict(X,return_std=True)
+        else:
+            Y=self.gp.predict(X)
         
         # Account for predicted means.
         for i,x in enumerate(X):
             Y[i]+=self.mui[int(x[0])]
-            
-        return Y
+           
+        if return_std:
+            return Y,Yerr
+        else:
+            return Y
     
     def optimize_hyperparameters(self,X,Y,
                                  initial_guess=None,
@@ -627,12 +646,20 @@ class BlockGPR(object):
             elif block:
                 initial_guess=np.ones(self.n*5+1)/3
         else:
+            initial_guess=np.array(initial_guess)
             if common and block:
                 assert len(initial_guess)==(5+self.n*5+1)
+                initial_guess[0]=np.log(initial_guess[0])
+                initial_guess[5:5+self.n]=np.log(initial_guess[5:5+self.n])
+                initial_guess[-1]=np.log(initial_guess[-1])
             elif common:
                 assert len(initial_guess)==(5+1)
+                initial_guess[0]=np.log(initial_guess[0])
+                initial_guess[-1]=np.log(initial_guess[-1])
             elif block:
                 assert len(initial_guess)==(self.n*5+1)
+                initial_guess[:self.n]=np.log(initial_guess[:self.n])
+                initial_guess[-1]=np.log(initial_guess[-1])
         if fix_params_function is None:
             fix_params_function=lambda x:None
         fix_params_function(initial_guess)
@@ -649,6 +676,11 @@ class BlockGPR(object):
         # of the entire covariance matrix.
         if common and block:
             def update_parameters(params):
+                params=params.copy()
+                params[0]=np.exp(params[0])
+                params[5:self.n+5]=np.exp(params[5:self.n+5])
+                params[-1]=np.exp(params[-1])
+
                 fix_params_function(params)
                 params=list(params)
                 
@@ -662,7 +694,6 @@ class BlockGPR(object):
                     del params[:self.n]
                 if not self._check_block_params(paramsBlock): return False
                 
-                if params[-1]<=0: return False
                 self.update_noise(paramsCo[0],paramsBlock[0],params[-1])
                 
                 self.update_mu(paramsCo[1],paramsBlock[1])
@@ -672,12 +703,15 @@ class BlockGPR(object):
                 
         elif common:
             def update_parameters(paramsCo):
+                paramsCo=paramsCo.copy()
+                paramsCo[0]=np.exp(paramsCo[0])
+                paramsCo[-1]=np.exp(paramsCo[-1])
+
                 fix_params_function(paramsCo)
                 params=list(params)
 
                 if not self._check_common_params(paramsCo): return False
 
-                if params[-1]<=0: return False
                 self.update_noise(noiseCo=params[0],noise=params[-1])
                 
                 self.update_mu(paramsCo[1])
@@ -686,6 +720,9 @@ class BlockGPR(object):
                 
         elif block:
             def update_parameters(params):
+                params=params.copy()
+                params[:self.n]=np.exp(params[:self.n])
+
                 fix_params_function(params)
                 params=list(params)
 
@@ -695,13 +732,11 @@ class BlockGPR(object):
                     del params[:self.n]
                 if not self._check_block_params(paramsBlock): return False
                 
-                if params[-1]<=0: return False
                 self.update_noise(noise=params[-1],noisei=paramsBlock[0])
                 
                 self.update_mu(mui=paramsBlock[1])
                 self.update_block_kernels(*paramsBlock[2:])
                 return True
-       
 
         if verbose:
             def neg_log_L(params):
@@ -722,6 +757,11 @@ class BlockGPR(object):
         # Run optimization.
         soln=minimize(neg_log_L,initial_guess,**minimize_kw)
         update_parameters(soln['x'])
+
+        # Transform noise parameters back to linear space from log space.
+        soln['x'][0]=np.exp(soln['x'][0])
+        soln['x'][5:self.n+5]=np.exp(soln['x'][5:self.n+5])
+        soln['x'][-1]=np.exp(soln['x'][-1])
 
         if return_full_output:
             return soln
@@ -752,16 +792,14 @@ class BlockGPR(object):
 
     @staticmethod
     def _check_common_params(paramsCo):
-        if ( paramsCo[0]<=0 or 
-             paramsCo[2]<=0 or
+        if ( paramsCo[2]<=0 or
              paramsCo[3]<=0 or 
              paramsCo[4]<=0 ): return False
         return True
     
     @staticmethod
     def _check_block_params(paramsBlock):
-        if ( (paramsBlock[0]<=0).any() or
-             (paramsBlock[2]<=0).any() or
+        if ( (paramsBlock[2]<=0).any() or
              (paramsBlock[3]<=0).any() or
              (paramsBlock[4]<=0).any() ): return False
         return True
@@ -772,7 +810,8 @@ class BlockGPR(object):
 class GaussianProcessRegressor(object):
     def __init__(self,kernel,beta,
                  approximate_cov=None,
-                 custom_noise_function=lambda x,y,xi,yi:0):
+                 custom_noise_function=lambda x,y,xi,yi:0,
+                 parallelize=False):
         """
         For any d-dimensional input and one dimensional output. From Bishop.
 
@@ -792,12 +831,16 @@ class GaussianProcessRegressor(object):
             be used to add diagonals to block matrices when we have a block matrix. Args are the two
             data points x and y and their indices in the covariance matrix xi and yi. Whatever is
             returned by this function is added to the corresponding entry in the covariance matrix.
+        parallelize : bool,False
+            If True, use multiprocess to parallelize calculation of the covariance matrix. Only
+            recommended for large systems.
         """
         assert beta>0
 
         self.kernel = kernel
         self.beta = beta
         self.noise_function=custom_noise_function
+        self.parallelize=parallelize
         self._define_calc_cov()
         self.approximate_cov=approximate_cov
 
@@ -992,15 +1035,30 @@ class GaussianProcessRegressor(object):
 
     def _define_calc_cov(self):
         """For calculating covariance matrix. Could be sped up by jitting everything."""
-        #@jit(nopython=True)
-        def calc_cov(X,kernel=self.kernel,noise_function=self.noise_function):
-            nSamples = len(X)
-            cov = np.zeros((nSamples,nSamples))
-            for i,j in combinations(range(nSamples),2):
-                cov[i,j] = cov[j,i] = kernel(X[i],X[j]) + noise_function(X[i],X[j],i,j)
-            for i in xrange(nSamples):
-                cov[i,i] += 1/self.beta + kernel(X[i],X[i])
-            return cov
+        if self.parallelize:
+            from scipy.spatial.distance import squareform
+            self.pool=mp.Pool(mp.cpu_count()-1)
+
+            def calc_cov(X,kernel=self.kernel,noise_function=self.noise_function):
+                nSamples = len(X)
+                def _off_diagonal_entries(ij):
+                    i,j=ij
+                    return kernel(X[i],X[j]) + noise_function(X[i],X[j],i,j)
+                cov=squareform(np.concatenate( self.pool.map( _off_diagonal_entries,
+                                              combinations(range(nSamples),2) )))
+
+                for i in xrange(nSamples):
+                    cov[i,i]+=1/self.beta + kernel(X[i],X[i])
+                return cov
+        else:
+            def calc_cov(X,kernel=self.kernel,noise_function=self.noise_function):
+                nSamples = len(X)
+                cov = np.zeros((nSamples,nSamples))
+                for i,j in combinations(range(nSamples),2):
+                    cov[i,j] = cov[j,i] = kernel(X[i],X[j]) + noise_function(X[i],X[j],i,j)
+                for i in xrange(nSamples):
+                    cov[i,i] += 1/self.beta + kernel(X[i],X[i])
+                return cov
 
         self.calc_cov = calc_cov
    
